@@ -24,11 +24,7 @@ import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorat
 export class SchoolsController {
   constructor(private readonly schoolsService: SchoolsService) {}
 
-  @Roles(Role.SUPER_ADMIN)
-  @Post()
-  async create(@Body() createSchoolDto: CreateSchoolDto): Promise<School> {
-    return await this.schoolsService.create(createSchoolDto);
-  }
+
 
   @Get()
   async findAll(@CurrentUser() user: AuthUser): Promise<School | School[]> {

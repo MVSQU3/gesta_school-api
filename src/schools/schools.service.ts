@@ -16,25 +16,6 @@ export class SchoolsService {
     private readonly schoolRepository: Repository<School>,
   ) {}
 
-  async create(createSchoolDto: CreateSchoolDto): Promise<School> {
-    const existing = await this.schoolRepository.findOne({
-      where: { slug: createSchoolDto.slug.toUpperCase() },
-    });
-
-    if (existing) {
-      throw new ConflictException(
-        `Un établissement avec le code ${createSchoolDto.slug.toUpperCase()} existe déjà.`,
-      );
-    }
-
-    const school = this.schoolRepository.create({
-      ...createSchoolDto,
-      slug: createSchoolDto.slug.toUpperCase(),
-    });
-
-    return await this.schoolRepository.save(school);
-  }
-
   async findAll(): Promise<School[]> {
     return await this.schoolRepository.find({
       order: { name: 'ASC' },
