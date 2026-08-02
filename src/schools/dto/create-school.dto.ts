@@ -1,4 +1,11 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { PeriodSystem } from '../entities/school.entity';
 
 export class CreateSchoolDto {
   @IsString({ message: 'Le nom de l’établissement doit être une chaîne de caractères' })
@@ -18,4 +25,15 @@ export class CreateSchoolDto {
   @IsString({ message: 'Le téléphone doit être une chaîne de caractères' })
   @IsOptional()
   phone?: string;
+
+  /**
+   * Découpage de l'année scolaire : trimestre (défaut) ou semestre.
+   * Détermine le nombre de périodes de notation créées à l'ouverture
+   * d'une année scolaire.
+   */
+  @IsOptional()
+  @IsEnum(PeriodSystem, {
+    message: 'Le découpage doit être TRIMESTER ou SEMESTER',
+  })
+  periodSystem?: PeriodSystem;
 }

@@ -1,5 +1,14 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 
+/**
+ * Découpage de l'année scolaire. Certains établissements fonctionnent au
+ * trimestre (3 périodes), d'autres au semestre (2 périodes).
+ */
+export enum PeriodSystem {
+  TRIMESTER = 'TRIMESTER',
+  SEMESTER = 'SEMESTER',
+}
+
 @Entity('schools')
 export class School {
   @PrimaryGeneratedColumn('uuid')
@@ -33,6 +42,17 @@ export class School {
     nullable: true,
   })
   phone: string;
+
+  /**
+   * Découpage de l'année scolaire retenu par l'établissement. Détermine le
+   * nombre de périodes de notation créées à l'ouverture d'une année scolaire.
+   */
+  @Column({
+    type: 'enum',
+    enum: PeriodSystem,
+    default: PeriodSystem.TRIMESTER,
+  })
+  periodSystem: PeriodSystem;
 
   @Column({
     type: 'timestamp',

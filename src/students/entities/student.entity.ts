@@ -1,10 +1,36 @@
-import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { Enrollment } from '../../enrollments/entities/enrollment.entity';
+import { School } from '../../schools/entities/school.entity';
 
 @Entity('students')
+// Sert la recherche d'un élève existant au moment de la réinscription.
+@Index(['schoolId', 'lastName', 'firstName'])
 export class Student {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  /**
+   * Établissement de rattachement.
+   *
+   * L'élève était auparavant global, ce qui posait deux problèmes : supprimer
+   * une école laissait ses élèves orphelins en base, et rien ne cloisonnait
+   * les élèves entre établissements. Un enfant scolarisé successivement dans
+   * deux écoles a désormais une fiche par école.
+   */
+  @Column({ type: 'uuid' })
+  schoolId: string;
+
+  @ManyToOne(() => School, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'schoolId' })
+  school: School;
 
   @Column({
     type: 'varchar',

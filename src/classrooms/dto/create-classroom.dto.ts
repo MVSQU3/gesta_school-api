@@ -1,4 +1,11 @@
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 import { ClassRoomLevel } from '../entities/classroom.entity';
 
 export class CreateClassRoomDto {
@@ -13,4 +20,9 @@ export class CreateClassRoomDto {
     message: 'Le niveau de la classe (COLLEGE ou LYCEE) est obligatoire',
   })
   level: ClassRoomLevel;
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Les frais de scolarité doivent être un nombre' })
+  @Min(0, { message: 'Les frais de scolarité ne peuvent pas être négatifs' })
+  tuitionFee?: number;
 }

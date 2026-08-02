@@ -13,7 +13,9 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
+import { PaginatedResult } from '../common/dto/pagination.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
+import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
 import { Enrollment } from './entities/enrollment.entity';
 import { EnrollmentsService } from './enrollments.service';
 import { AuthUser, CurrentUser } from 'src/common/decorators/current-user.decorator';
@@ -36,7 +38,27 @@ export class EnrollmentsController {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
     createEnrollmentDto.schoolId = schoolId;
-    return await this.enrollmentsService.create(createEnrollmentDto);
+    return await this.enrollmentsService.create(createEnrollmentDto, user.id);
+  }
+
+  /**
+   * Liste paginée et filtrable des dossiers de l'école.
+   * Filtres : statut, recherche libre (nom, prénom, référence, téléphone),
+   * année scolaire, classe.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.ACCOUNTANT)
+  @Get()
+  async findAll(
+    @Query() query: QueryEnrollmentsDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<PaginatedResult<Enrollment>> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
+      ? querySchoolId
+      : user.schoolId;
+    if (!schoolId)
+      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.enrollmentsService.findAll(schoolId, query);
   }
 
   /**
@@ -85,5 +107,22 @@ export class EnrollmentsController {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé");
     return await this.enrollmentsService.findByReference(schoolId, reference);
+  }
+
+  /**
+   * VALIDATION D'UNE INSCRIPTION
+   * Passe le statut PENDING_PAYMENT → ENROLLED.
+   * Réservé au directeur et à la secrétaire de l'école concernée.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
+  @Patch(':id/validate')
+  async validate(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<Enrollment> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.enrollmentsService.validate(id, schoolId);
   }
 }

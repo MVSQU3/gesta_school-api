@@ -44,19 +44,89 @@ export class StudentsService {
     return activeYear.id;
   }
 
-  async create(createStudentDto: CreateStudentDto): Promise<Student> {
-    // Conversion de la date locale JJ-MM-AAAA en Date JS/SQL
-    const [day, month, year] = createStudentDto.birthDay.split(/[-/]/);
-    const parsedBirthDay = new Date(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-    );
+  /** Convertit la date locale JJ-MM-AAAA (ou JJ/MM/AAAA) en Date JS/SQL. */
+  private parseBirthDay(birthDay: string): Date {
+    const [day, month, year] = birthDay.split(/[-/]/);
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+
+  /**
+   * Recherche un élève déjà enregistré dans l'établissement, sur la base du
+   * triplet nom + prénom + date de naissance.
+   *
+   * Sert à éviter qu'une réinscription ne crée une seconde fiche pour le même
+   * enfant, ce qui ferait perdre son historique d'une année sur l'autre.
+   * La comparaison des noms est insensible à la casse et aux espaces de bord.
+   */
+  async findDuplicate(
+    schoolId: string,
+    firstName: string,
+    lastName: string,
+    birthDay: string,
+  ): Promise<Student | null> {
+    return await this.studentRepository
+      .createQueryBuilder('student')
+      .where('student.schoolId = :schoolId', { schoolId })
+      .andWhere('LOWER(TRIM(student.firstName)) = :firstName', {
+        firstName: firstName.trim().toLowerCase(),
+      })
+      .andWhere('LOWER(TRIM(student.lastName)) = :lastName', {
+        lastName: lastName.trim().toLowerCase(),
+      })
+      .andWhere('student.birthDay = :birthDay', {
+        birthDay: this.parseBirthDay(birthDay),
+      })
+      .getOne();
+  }
+
+  /** Charge un élève en vérifiant qu'il appartient bien à l'établissement. */
+  async findOneOfSchool(
+    studentId: string,
+    schoolId: string,
+  ): Promise<Student | null> {
+    if (!schoolId) throw new UnauthorizedException('Accès refusé.');
+    return await this.studentRepository.findOne({
+      where: { id: studentId, schoolId },
+    });
+  }
+
+  /**
+   * Recherche libre d'un élève de l'établissement, par nom, prénom ou
+   * téléphone du parent. Utilisée au secrétariat pour retrouver un élève
+   * déjà connu plutôt que d'en ressaisir un nouveau.
+   */
+  async search(schoolId: string, query: string): Promise<Student[]> {
+    if (!schoolId) throw new UnauthorizedException('Accès refusé.');
+
+    const term = query?.trim();
+    if (!term || term.length < 2) return [];
+
+    return await this.studentRepository
+      .createQueryBuilder('student')
+      .where('student.schoolId = :schoolId', { schoolId })
+      .andWhere(
+        `(LOWER(student."firstName") LIKE :term
+          OR LOWER(student."lastName") LIKE :term
+          OR student."parentPhone" LIKE :term)`,
+        { term: `%${term.toLowerCase()}%` },
+      )
+      .orderBy('student.lastName', 'ASC')
+      .addOrderBy('student.firstName', 'ASC')
+      .limit(20)
+      .getMany();
+  }
+
+  async create(
+    createStudentDto: CreateStudentDto,
+    schoolId: string,
+  ): Promise<Student> {
+    if (!schoolId) throw new UnauthorizedException('Accès refusé.');
 
     const student = this.studentRepository.create({
-      firstName: createStudentDto.firstName,
-      lastName: createStudentDto.lastName,
-      birthDay: parsedBirthDay,
+      schoolId,
+      firstName: createStudentDto.firstName.trim(),
+      lastName: createStudentDto.lastName.trim(),
+      birthDay: this.parseBirthDay(createStudentDto.birthDay),
       parentPhone: createStudentDto.parentPhone,
     });
 

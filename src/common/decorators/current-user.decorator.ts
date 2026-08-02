@@ -10,6 +10,8 @@ export interface AuthUser {
   schoolId: string;
   slug: string;
   roles: Role[];
+  /** Mot de passe provisoire en cours : toute action est bloquee sauf son changement. */
+  mustChangePassword?: boolean;
 }
 
 /**

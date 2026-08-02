@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, Query, Param } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Post, Body, UseGuards, Query, Param } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -12,10 +12,41 @@ import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorat
 export class StudentsController {
   constructor(private readonly studentsService: StudentsService) {}
 
-  @Roles(Role.DIRECTOR, Role.SECRETARY)
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
   @Post()
-  create(@Body() createStudentDto: CreateStudentDto) {
-    return this.studentsService.create(createStudentDto);
+  create(
+    @Body() createStudentDto: CreateStudentDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
+      ? querySchoolId
+      : user.schoolId;
+    if (!schoolId) {
+      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    }
+    return this.studentsService.create(createStudentDto, schoolId);
+  }
+
+  /**
+   * Recherche d'un élève déjà enregistré, pour une réinscription.
+   * Doit être déclarée avant `@Get(':studentId')` pour ne pas être capturée
+   * par la route paramétrée.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
+  @Get('search')
+  search(
+    @Query('q') q: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
+      ? querySchoolId
+      : user.schoolId;
+    if (!schoolId) {
+      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    }
+    return this.studentsService.search(schoolId, q ?? '');
   }
 
   @Roles(Role.DIRECTOR, Role.SECRETARY)

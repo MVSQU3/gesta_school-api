@@ -12,10 +12,10 @@ async function bootstrap() {
       whitelist: true,
       transform: true,
     }),
-  );
+  )
 
   // Activation du CORS pour l'interface Frontend React
-  app.enableCors();
+  app.enableCors()
 
   await app.listen(process.env.PORT ?? 3000);
 }

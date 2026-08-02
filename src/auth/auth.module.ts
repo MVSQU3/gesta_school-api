@@ -11,8 +11,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     UsersModule,
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'super-secret-gesta-school-key', // En prod, utiliser une variable d'environnement
-      signOptions: { expiresIn: '1d' }, // Le token expire dans 1 jour
+      secret: process.env.JWT_SECRET as string,
+      signOptions: { expiresIn: '1d' },
     }),
   ],
   controllers: [AuthController],

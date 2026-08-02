@@ -17,7 +17,13 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "typeorm": "npx typeorm-ts-node-commonjs -d src/data-source.ts",
+    "migration:generate": "npx typeorm-ts-node-commonjs -d src/data-source.ts migration:generate",
+    "migration:create": "npx typeorm-ts-node-commonjs migration:create",
+    "migration:run": "npx typeorm-ts-node-commonjs -d src/data-source.ts migration:run",
+    "migration:revert": "npx typeorm-ts-node-commonjs -d src/data-source.ts migration:revert",
+    "migration:show": "npx typeorm-ts-node-commonjs -d src/data-source.ts migration:show"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -35,6 +41,7 @@
     "libphonenumber-js": "^1.13.7",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "pdfmake": "^0.2.20",
     "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -55,6 +62,7 @@
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.7",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pdfmake": "^0.3.3",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",

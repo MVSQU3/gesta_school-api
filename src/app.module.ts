@@ -12,10 +12,20 @@ import { SchoolsModule } from './schools/schools.module';
 import { StudentsModule } from './students/students.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { AdminModule } from './admin/admin.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { PdfModule } from './common/pdf/pdf.module';
+import { GradingPeriodsModule } from './grading-periods/grading-periods.module';
+import { SubjectsModule } from './subjects/subjects.module';
+import { TeachingModule } from './teaching/teaching.module';
+import { EvaluationsModule } from './evaluations/evaluations.module';
+import { AbsencesModule } from './absences/absences.module';
+import { BulletinsModule } from './bulletins/bulletins.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    PdfModule,
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
@@ -24,7 +34,25 @@ import { UsersModule } from './users/users.module';
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
-      synchronize: true,
+      migrations: [__dirname + '/migrations/*{.ts,.js}'],
+
+      /**
+       * `synchronize` aligne le schéma sur les entités à chaque démarrage — et
+       * supprime sans prévenir toute colonne ou table qu'il ne reconnaît pas.
+       * Il reste désactivé par défaut : le schéma n'évolue que par migrations.
+       *
+       * DB_SYNCHRONIZE=true reste possible pour un prototypage sur base
+       * jetable, jamais sur une base contenant des données réelles.
+       */
+      synchronize: process.env.DB_SYNCHRONIZE === 'true',
+
+      /**
+       * Exécution des migrations au démarrage. Désactivée par défaut : on
+       * préfère `npm run migration:run` avant la mise en service, pour qu'un
+       * échec de migration soit traité comme tel plutôt que comme un
+       * démarrage raté.
+       */
+      migrationsRun: process.env.DB_MIGRATIONS_RUN === 'true',
     }),
     SchoolsModule,
     StudentsModule,
@@ -35,8 +63,17 @@ import { UsersModule } from './users/users.module';
     CronModule,
     UsersModule,
     AuthModule,
+    AdminModule,
+    DashboardModule,
+    // Notation et assiduité
+    GradingPeriodsModule,
+    SubjectsModule,
+    TeachingModule,
+    EvaluationsModule,
+    AbsencesModule,
+    BulletinsModule
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

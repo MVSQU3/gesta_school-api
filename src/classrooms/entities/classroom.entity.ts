@@ -5,6 +5,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { numericTransformer } from '../../common/transformers/numeric.transformer';
 import { School } from '../../schools/entities/school.entity';
 
 export enum ClassRoomLevel {
@@ -33,6 +34,21 @@ export class ClassRoom {
     default: ClassRoomLevel.COLLEGE,
   })
   level: ClassRoomLevel;
+
+  /**
+   * Frais de scolarité annuels de la classe, en FCFA.
+   * Sert de référence au montant dû lors de l'inscription ; la valeur est
+   * recopiée sur l'inscription au moment de la saisie, si bien qu'une révision
+   * ultérieure du tarif ne modifie pas les dossiers déjà ouverts.
+   */
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  tuitionFee: number;
 
   @Column({
     type: 'timestamp',

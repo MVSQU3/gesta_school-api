@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Post, UseGuards, Query, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, Query, ForbiddenException } from '@nestjs/common';
 import { ClassRoomsService } from './classrooms.service';
 import { CreateClassRoomDto } from './dto/create-classroom.dto';
+import { UpdateClassRoomDto } from './dto/update-classroom.dto';
 import { ClassRoom } from './entities/classroom.entity';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -45,5 +46,36 @@ export class ClassRoomsController {
   @Get(':id')
   async findOne(@Param('id') id: string): Promise<ClassRoom> {
     return await this.classRoomsService.findOne(id);
+  }
+
+  /**
+   * Modification d'une classe (nom, niveau, frais de scolarité).
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() updateClassRoomDto: UpdateClassRoomDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<ClassRoom> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.classRoomsService.update(id, updateClassRoomDto, schoolId);
+  }
+
+  /**
+   * Suppression d'une classe, refusée si des inscriptions y sont rattachées.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<{ message: string }> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.classRoomsService.remove(id, schoolId);
   }
 }

@@ -9,7 +9,6 @@ import {
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
-import { CreateSchoolDto } from './dto/create-school.dto';
 import { UpdateSchoolDto } from './dto/update-school.dto';
 import { School } from './entities/school.entity';
 import { SchoolsService } from './schools.service';
@@ -27,11 +26,13 @@ export class SchoolsController {
 
 
   @Get()
-  async findAll(@CurrentUser() user: AuthUser): Promise<School | School[]> {
+  async findAll(@CurrentUser() user: AuthUser): Promise<School[]> {
     if (user.roles.includes(Role.SUPER_ADMIN)) {
       return await this.schoolsService.findAll();
     }
-    return await this.schoolsService.findOne(user.schoolId);
+    // Toujours retourner un tableau pour que le front puisse faire .map() etc.
+    const school = await this.schoolsService.findOne(user.schoolId);
+    return school ? [school] : [];
   }
 
   @Get(':id')
