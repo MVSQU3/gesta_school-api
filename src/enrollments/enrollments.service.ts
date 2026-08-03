@@ -21,8 +21,10 @@ import {
 import { Payment } from '../payments/entities/payment.entity';
 import { School } from '../schools/entities/school.entity';
 import { StudentsService } from '../students/students.service';
+import { BulkEnrollDto } from './dto/bulk-enroll.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
+import { UpdateEnrollmentDto } from './dto/update-enrollment.dto';
 import { Enrollment, EnrollmentStatus } from './entities/enrollment.entity';
 
 /** Inscription enrichie de sa situation financière. */
@@ -41,6 +43,8 @@ export class EnrollmentsService {
     private readonly classRoomRepository: Repository<ClassRoom>,
     @InjectRepository(AcademicYear)
     private readonly academicYearRepository: Repository<AcademicYear>,
+    @InjectRepository(Payment)
+    private readonly paymentRepository: Repository<Payment>,
     private readonly studentsService: StudentsService,
     private readonly referencesService: ReferencesService,
     private readonly balanceService: BalanceService,
@@ -224,6 +228,229 @@ export class EnrollmentsService {
 
     // Retourner l'inscription rechargée avec l'élève et ses coordonnées
     return await this.findOne(saved.id);
+  }
+
+  /**
+   * Réinscription en masse : un dossier par élève de la liste, dans la même
+   * classe et la même année.
+   *
+   * Chaque élève est traité indépendamment, et non dans une transaction
+   * unique. C'est délibéré : à la rentrée, sur une classe de trente, il y en a
+   * toujours un ou deux qui ont déjà un dossier ouvert au guichet la veille.
+   * Tout annuler pour ces deux-là obligerait le secrétariat à retrouver les
+   * fautifs à la main avant de recommencer. Le lot passe donc pour tous les
+   * autres, et le compte rendu dit précisément qui a été écarté et pourquoi.
+   *
+   * Les références restent uniques et consécutives : le compteur est atomique,
+   * chaque création en consomme une.
+   */
+  async bulkEnroll(
+    dto: BulkEnrollDto,
+    schoolId: string,
+    createdByUserId: string | null = null,
+  ): Promise<{
+    created: Array<{ studentId: string; reference: string; name: string }>;
+    skipped: Array<{ studentId: string; name: string; reason: string }>;
+  }> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const classRoom = await this.classRoomRepository.findOne({
+      where: { id: dto.classRoomId, schoolId },
+    });
+    if (!classRoom) {
+      throw new NotFoundException(
+        "La classe d'accueil n'existe pas dans cet établissement.",
+      );
+    }
+
+    const academicYear = await this.academicYearRepository.findOne({
+      where: { id: dto.academicYearId, schoolId },
+    });
+    if (!academicYear) {
+      throw new NotFoundException(
+        "L'année scolaire sélectionnée n'existe pas dans cet établissement.",
+      );
+    }
+
+    const created: Array<{ studentId: string; reference: string; name: string }> = [];
+    const skipped: Array<{ studentId: string; name: string; reason: string }> = [];
+
+    // Les doublons de la liste sont écartés d'emblée : deux fois le même élève
+    // dans la sélection ne doit pas produire deux dossiers.
+    const uniqueIds = [...new Set(dto.studentIds)];
+
+    for (const studentId of uniqueIds) {
+      const student = await this.studentsService.findOneOfSchool(
+        studentId,
+        schoolId,
+      );
+      const name = student
+        ? `${student.lastName} ${student.firstName}`
+        : studentId;
+
+      if (!student) {
+        skipped.push({
+          studentId,
+          name,
+          reason: "Cet élève n'appartient pas à l'établissement.",
+        });
+        continue;
+      }
+
+      try {
+        const enrollment = await this.create(
+          {
+            schoolId,
+            studentId,
+            classRoomId: dto.classRoomId,
+            academicYearId: dto.academicYearId,
+          },
+          createdByUserId,
+        );
+        created.push({ studentId, reference: enrollment.reference, name });
+      } catch (error) {
+        skipped.push({
+          studentId,
+          name,
+          reason:
+            error instanceof ConflictException || error instanceof NotFoundException
+              ? this.extractMessage(error)
+              : 'Erreur inattendue lors de la création du dossier.',
+        });
+      }
+    }
+
+    return { created, skipped };
+  }
+
+  /**
+   * Message lisible d'une exception HTTP, que la réponse soit une chaîne ou
+   * l'objet enrichi renvoyé lors d'un doublon d'élève.
+   */
+  private extractMessage(error: ConflictException | NotFoundException): string {
+    const response = error.getResponse();
+    if (typeof response === 'string') return response;
+    const message = (response as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+    if (Array.isArray(message)) return String(message[0]);
+    return error.message;
+  }
+
+  /**
+   * Correction d'un dossier : changement de classe.
+   *
+   * Deux usages, qui se traitent de la même façon : l'erreur de saisie du jour
+   * de l'inscription (6ème A au lieu de 6ème B) et le changement de classe en
+   * cours d'année.
+   *
+   * Le montant dû suit le tarif de la nouvelle classe. C'est nécessaire : le
+   * tarif est recopié sur le dossier à la création, sans quoi un élève déplacé
+   * d'une 6ème à 120 000 vers une 3ème à 165 000 resterait redevable de
+   * l'ancien montant. Le statut est ensuite recalculé sur le nouveau total,
+   * exactement comme le fait la caisse après un encaissement : un dossier
+   * soldé peut ainsi redevenir partiellement payé, et inversement.
+   *
+   * Le déplacement est refusé si l'élève a déjà versé plus que le tarif de la
+   * classe d'accueil : la correction créerait un trop-perçu que le système ne
+   * sait pas représenter. Il faut alors annuler le versement en trop d'abord,
+   * ce qui laisse une trace, plutôt que de faire disparaître la somme.
+   */
+  async update(
+    id: string,
+    dto: UpdateEnrollmentDto,
+    schoolId: string,
+  ): Promise<EnrollmentWithBalance> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const enrollment = await this.enrollmentRepository.findOne({
+      where: { id, schoolId },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(`Dossier introuvable (${id}).`);
+    }
+
+    if (!dto.classRoomId || dto.classRoomId === enrollment.classRoomId) {
+      return await this.findByReference(schoolId, enrollment.reference);
+    }
+
+    const classRoom = await this.classRoomRepository.findOne({
+      where: { id: dto.classRoomId, schoolId },
+    });
+    if (!classRoom) {
+      throw new NotFoundException(
+        "La classe demandée n'existe pas dans cet établissement.",
+      );
+    }
+
+    const amountPaid = await this.balanceService.sumPayments(enrollment.id);
+    const newTotalDue = Number(classRoom.tuitionFee) || 0;
+
+    if (newTotalDue > 0 && amountPaid > newTotalDue) {
+      throw new ConflictException(
+        `Ce dossier a déjà reçu ${amountPaid.toLocaleString('fr-FR')} FCFA, soit plus que les frais de la classe ${classRoom.name} (${newTotalDue.toLocaleString('fr-FR')} FCFA). Annulez d'abord le versement excédentaire depuis le journal de caisse.`,
+      );
+    }
+
+    enrollment.classRoomId = classRoom.id;
+    enrollment.totalDue = newTotalDue;
+
+    if (newTotalDue > 0 && amountPaid >= newTotalDue) {
+      enrollment.status = EnrollmentStatus.ENROLLED;
+    } else if (amountPaid > 0) {
+      enrollment.status = EnrollmentStatus.PARTIALLY_PAID;
+    } else if (enrollment.status !== EnrollmentStatus.EXPIRED) {
+      // Aucun versement : le dossier reste soumis à son jeton de 72h, dont
+      // l'échéance n'est pas repoussée par une correction de classe.
+      enrollment.status = EnrollmentStatus.PENDING_PAYMENT;
+    }
+
+    await this.enrollmentRepository.save(enrollment);
+    return await this.findByReference(schoolId, enrollment.reference);
+  }
+
+  /**
+   * Suppression d'un dossier ouvert par erreur.
+   *
+   * Strictement réservée aux dossiers n'ayant jamais reçu le moindre
+   * versement, y compris annulé : dès qu'un mouvement de caisse existe, le
+   * dossier est une pièce comptable et ne s'efface pas — son numéro de reçu a
+   * été délivré à une famille. Il faut alors annuler les versements, ce qui
+   * conserve la trace de l'opération et du motif.
+   *
+   * La référence consommée n'est pas rendue : les compteurs ne reculent
+   * jamais, un même numéro ne doit pas pouvoir désigner deux dossiers.
+   *
+   * Les notes et absences éventuellement saisies partent avec le dossier
+   * (cascade en base) — c'est cohérent, elles n'ont de sens que rattachées à
+   * une inscription.
+   */
+  async remove(id: string, schoolId: string): Promise<{ message: string }> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const enrollment = await this.enrollmentRepository.findOne({
+      where: { id, schoolId },
+      relations: { student: true },
+    });
+    if (!enrollment) {
+      throw new NotFoundException(`Dossier introuvable (${id}).`);
+    }
+
+    const paymentCount = await this.paymentRepository.count({
+      where: { enrollmentId: enrollment.id },
+    });
+
+    if (paymentCount > 0) {
+      throw new ConflictException(
+        `Le dossier ${enrollment.reference} porte ${paymentCount} versement(s) et ne peut pas être supprimé. Annulez-les depuis le journal de caisse : la trace de l'opération doit être conservée.`,
+      );
+    }
+
+    const label = `${enrollment.student?.lastName ?? ''} ${enrollment.student?.firstName ?? ''}`.trim();
+    await this.enrollmentRepository.remove(enrollment);
+
+    return {
+      message: `Le dossier ${enrollment.reference}${label ? ` (${label})` : ''} a été supprimé. La fiche de l'élève est conservée.`,
+    };
   }
 
   async findAllExpired(): Promise<Enrollment[]> {

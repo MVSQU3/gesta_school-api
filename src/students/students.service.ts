@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -6,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateStudentDto } from './dto/create-student.dto';
+import { UpdateStudentDto } from './dto/update-student.dto';
 import { Student } from './entities/student.entity';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
 
@@ -129,6 +131,76 @@ export class StudentsService {
       birthDay: this.parseBirthDay(createStudentDto.birthDay),
       parentPhone: createStudentDto.parentPhone,
     });
+
+    return await this.studentRepository.save(student);
+  }
+
+  /**
+   * Correction d'une fiche élève : orthographe du nom, date de naissance,
+   * numéro du parent.
+   *
+   * La fiche est partagée par toutes les inscriptions de l'élève : corriger un
+   * nom mal saisi le corrige rétroactivement sur les bulletins et les reçus à
+   * venir, ce qui est bien l'effet recherché — c'est le même enfant.
+   *
+   * L'établissement de rattachement n'est volontairement pas modifiable : un
+   * enfant qui change d'école a une fiche par école, et déplacer la fiche
+   * emporterait ses inscriptions, ses notes et ses absences hors du
+   * cloisonnement de l'établissement d'origine.
+   */
+  async update(
+    studentId: string,
+    dto: UpdateStudentDto,
+    schoolId: string,
+  ): Promise<Student> {
+    if (!schoolId) throw new UnauthorizedException('Accès refusé.');
+
+    const student = await this.studentRepository.findOne({
+      where: { id: studentId, schoolId },
+    });
+    if (!student) {
+      throw new NotFoundException(`Élève introuvable (${studentId}).`);
+    }
+
+    const firstName = dto.firstName?.trim() ?? student.firstName;
+    const lastName = dto.lastName?.trim() ?? student.lastName;
+    const birthDay = dto.birthDay
+      ? this.parseBirthDay(dto.birthDay)
+      : student.birthDay;
+
+    // Une correction ne doit pas aboutir à deux fiches pour le même enfant :
+    // le triplet nom + prénom + date de naissance sert déjà à éviter le
+    // doublon à la réinscription, il vaut aussi ici.
+    const identityChanged =
+      firstName !== student.firstName ||
+      lastName !== student.lastName ||
+      String(birthDay) !== String(student.birthDay);
+
+    if (identityChanged) {
+      const duplicate = await this.studentRepository
+        .createQueryBuilder('student')
+        .where('student.schoolId = :schoolId', { schoolId })
+        .andWhere('student.id != :studentId', { studentId })
+        .andWhere('LOWER(TRIM(student.firstName)) = :firstName', {
+          firstName: firstName.toLowerCase(),
+        })
+        .andWhere('LOWER(TRIM(student.lastName)) = :lastName', {
+          lastName: lastName.toLowerCase(),
+        })
+        .andWhere('student.birthDay = :birthDay', { birthDay })
+        .getOne();
+
+      if (duplicate) {
+        throw new ConflictException(
+          `Une autre fiche existe déjà pour ${lastName} ${firstName}, né(e) le même jour. Vérifiez qu'il ne s'agit pas du même élève.`,
+        );
+      }
+    }
+
+    student.firstName = firstName;
+    student.lastName = lastName;
+    student.birthDay = birthDay;
+    if (dto.parentPhone) student.parentPhone = dto.parentPhone;
 
     return await this.studentRepository.save(student);
   }

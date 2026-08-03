@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -29,19 +31,24 @@ export class AbsencesService {
   ) {}
 
   /**
-   * Un enseignant ne fait l'appel que dans les classes où il intervient.
-   * Le secrétariat et la direction ne sont pas soumis à ce contrôle : ce sont
-   * eux qui centralisent l'assiduité.
+   * Un enseignant ne travaille que sur les classes où il intervient.
+   *
+   * La direction n'est jamais soumise à ce contrôle. Le secrétariat en est
+   * dispensé en lecture — il centralise le suivi de l'assiduité — mais ne
+   * constate pas l'appel lui-même : la saisie lui est fermée en amont, dans le
+   * contrôleur.
    */
   private async assertCanAccessClass(
     user: AuthUser,
     classRoomId: string,
     academicYearId: string,
+    mode: 'read' | 'write' = 'write',
   ): Promise<void> {
-    const isStaff = user.roles.some((r) =>
-      [Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY].includes(r),
-    );
-    if (isStaff) return;
+    const exempt =
+      mode === 'read'
+        ? [Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY]
+        : [Role.SUPER_ADMIN, Role.DIRECTOR];
+    if (user.roles.some((r) => exempt.includes(r))) return;
 
     const assignments = await this.teachingService.findAll(user.schoolId, {
       teacherId: user.id,
@@ -50,9 +57,7 @@ export class AbsencesService {
     });
 
     if (assignments.length === 0) {
-      throw new ForbiddenException(
-        "Vous n'intervenez pas dans cette classe.",
-      );
+      throw new ForbiddenException("Vous n'intervenez pas dans cette classe.");
     }
   }
 
@@ -64,20 +69,71 @@ export class AbsencesService {
     schoolId: string,
     academicYearId: string,
     date: Date,
-  ): Promise<string | null> {
+  ): Promise<GradingPeriod | null> {
     const periods = await this.periodRepository.find({
       where: { schoolId, academicYearId },
       order: { sequence: 'ASC' },
     });
 
-    const match = periods.find(
-      (p) =>
-        p.startDate &&
-        p.endDate &&
-        date >= new Date(p.startDate) &&
-        date <= new Date(p.endDate),
+    return (
+      periods.find(
+        (p) =>
+          p.startDate &&
+          p.endDate &&
+          date >= new Date(p.startDate) &&
+          date <= new Date(p.endDate),
+      ) ?? null
     );
-    return match?.id ?? null;
+  }
+
+  /** Jour courant au format `AAAA-MM-JJ`, dans le fuseau du serveur. */
+  private today(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate(),
+    ).padStart(2, '0')}`;
+  }
+
+  /**
+   * Contrôle la date d'un appel et renvoie la période de notation concernée.
+   *
+   * Trois refus, dans cet ordre :
+   *  - une date à venir : on ne constate pas une absence qui n'a pas eu lieu ;
+   *  - une date hors année scolaire : aucune période ne la couvre, l'absence
+   *    ne serait comptée sur aucun bulletin et resterait invisible ;
+   *  - une période clôturée : les bulletins sont édités, leur cumul d'absences
+   *    ne peut plus être contredit après coup.
+   */
+  private async resolveOpenPeriod(
+    schoolId: string,
+    academicYearId: string,
+    date: string,
+  ): Promise<GradingPeriod> {
+    if (date > this.today()) {
+      throw new BadRequestException(
+        "L'appel ne peut pas être fait pour une date à venir.",
+      );
+    }
+
+    const period = await this.resolvePeriod(
+      schoolId,
+      academicYearId,
+      new Date(date),
+    );
+
+    if (!period) {
+      throw new BadRequestException(
+        `Le ${date} ne tombe dans aucune période de notation de cette année scolaire : l'appel n'y serait rattaché à aucun bulletin.`,
+      );
+    }
+
+    if (period.isClosed) {
+      throw new ConflictException(
+        `La période ${period.label} est clôturée : l'appel n'y est plus modifiable.`,
+      );
+    }
+
+    return period;
   }
 
   /**
@@ -94,6 +150,11 @@ export class AbsencesService {
     await this.assertCanAccessClass(user, dto.classRoomId, dto.academicYearId);
     const recordedByUserId = user.id;
 
+    const period = await this.resolveOpenPeriod(
+      schoolId,
+      dto.academicYearId,
+      dto.date,
+    );
     const date = new Date(dto.date);
 
     const classEnrollments = await this.enrollmentRepository.find({
@@ -111,11 +172,7 @@ export class AbsencesService {
     });
     const classEnrollmentIds = classEnrollments.map((e) => e.id);
 
-    const gradingPeriodId = await this.resolvePeriod(
-      schoolId,
-      dto.academicYearId,
-      date,
-    );
+    const gradingPeriodId = period.id;
 
     // Absences déjà enregistrées pour cette classe à cette date
     const existing = classEnrollmentIds.length
@@ -184,7 +241,7 @@ export class AbsencesService {
     user: AuthUser,
   ) {
     if (!schoolId) throw new ForbiddenException('schoolId est requis');
-    await this.assertCanAccessClass(user, classRoomId, academicYearId);
+    await this.assertCanAccessClass(user, classRoomId, academicYearId, 'read');
 
     const enrollments = await this.enrollmentRepository.find({
       where: {
@@ -295,7 +352,10 @@ export class AbsencesService {
     enrollmentIds: string[],
     gradingPeriodId: string,
   ): Promise<Map<string, { justified: number; unjustified: number }>> {
-    const result = new Map<string, { justified: number; unjustified: number }>();
+    const result = new Map<
+      string,
+      { justified: number; unjustified: number }
+    >();
     if (enrollmentIds.length === 0) return result;
 
     const rows = await this.absenceRepository
@@ -304,11 +364,19 @@ export class AbsencesService {
       .addSelect('absence.isJustified', 'isJustified')
       .addSelect('COUNT(*)', 'count')
       .where('absence.schoolId = :schoolId', { schoolId })
-      .andWhere('absence.enrollmentId IN (:...enrollmentIds)', { enrollmentIds })
-      .andWhere('absence.gradingPeriodId = :gradingPeriodId', { gradingPeriodId })
+      .andWhere('absence.enrollmentId IN (:...enrollmentIds)', {
+        enrollmentIds,
+      })
+      .andWhere('absence.gradingPeriodId = :gradingPeriodId', {
+        gradingPeriodId,
+      })
       .groupBy('absence.enrollmentId')
       .addGroupBy('absence.isJustified')
-      .getRawMany<{ enrollmentId: string; isJustified: boolean; count: string }>();
+      .getRawMany<{
+        enrollmentId: string;
+        isJustified: boolean;
+        count: string;
+      }>();
 
     for (const row of rows) {
       const entry = result.get(row.enrollmentId) ?? {

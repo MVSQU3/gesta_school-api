@@ -5,6 +5,7 @@ import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
 import { ClassRoom } from '../classrooms/entities/classroom.entity';
+import { Payment } from '../payments/entities/payment.entity';
 import { School } from '../schools/entities/school.entity';
 import { StudentsService } from '../students/students.service';
 import { Enrollment, EnrollmentStatus } from './entities/enrollment.entity';
@@ -16,6 +17,7 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
   let mockSchoolRepository: any;
   let mockClassRoomRepository: any;
   let mockAcademicYearRepository: any;
+  let mockPaymentRepository: any;
   let mockStudentsService: any;
   let mockReferencesService: any;
   let mockBalanceService: any;
@@ -61,6 +63,11 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
       }),
     };
 
+    // Sert au refus de suppression d'un dossier portant des versements.
+    mockPaymentRepository = {
+      count: jest.fn().mockResolvedValue(0),
+    };
+
     mockBalanceService = {
       compute: jest.fn(),
       sumPayments: jest.fn().mockResolvedValue(0),
@@ -92,6 +99,10 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
         {
           provide: getRepositoryToken(AcademicYear),
           useValue: mockAcademicYearRepository,
+        },
+        {
+          provide: getRepositoryToken(Payment),
+          useValue: mockPaymentRepository,
         },
         {
           provide: BalanceService,

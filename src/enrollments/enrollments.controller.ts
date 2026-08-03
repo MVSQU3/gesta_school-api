@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -14,10 +15,12 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { PaginatedResult } from '../common/dto/pagination.dto';
+import { BulkEnrollDto } from './dto/bulk-enroll.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
+import { UpdateEnrollmentDto } from './dto/update-enrollment.dto';
 import { Enrollment } from './entities/enrollment.entity';
-import { EnrollmentsService } from './enrollments.service';
+import { EnrollmentsService, EnrollmentWithBalance } from './enrollments.service';
 import { AuthUser, CurrentUser } from 'src/common/decorators/current-user.decorator';
 
 @Controller('api/v1/enrollments')
@@ -39,6 +42,25 @@ export class EnrollmentsController {
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
     createEnrollmentDto.schoolId = schoolId;
     return await this.enrollmentsService.create(createEnrollmentDto, user.id);
+  }
+
+
+  /**
+   * RÉINSCRIPTION EN MASSE
+   * Ouvre un dossier pour chaque élève de la liste dans la classe d'accueil.
+   * Les élèves déjà inscrits sur l'année sont écartés sans faire échouer le lot,
+   * et le compte rendu dit lesquels.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
+  @Post('bulk')
+  async bulkEnroll(
+    @Body() dto: BulkEnrollDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.enrollmentsService.bulkEnroll(dto, schoolId, user.id);
   }
 
   /**
@@ -124,5 +146,41 @@ export class EnrollmentsController {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
     return await this.enrollmentsService.validate(id, schoolId);
+  }
+
+  /**
+   * CORRECTION D'UN DOSSIER
+   * Changement de classe — erreur de saisie ou changement en cours d'année.
+   * Le montant dû suit le tarif de la nouvelle classe, et le statut est
+   * recalculé sur ce nouveau total.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateEnrollmentDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<EnrollmentWithBalance> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.enrollmentsService.update(id, dto, schoolId);
+  }
+
+  /**
+   * SUPPRESSION D'UN DOSSIER OUVERT PAR ERREUR
+   * Refusée dès qu'un versement existe, même annulé : le dossier est alors une
+   * pièce comptable. Réservée à la direction.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<{ message: string }> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    return await this.enrollmentsService.remove(id, schoolId);
   }
 }

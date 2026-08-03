@@ -9,7 +9,10 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
+import {
+  AuthUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -24,8 +27,14 @@ import { Absence } from './entities/absence.entity';
 export class AbsencesController {
   constructor(private readonly service: AbsencesService) {}
 
-  /** Appel d'une classe pour une date : enregistre les absents. */
-  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.TEACHER)
+  /**
+   * Appel d'une classe pour une date : enregistre les absents.
+   *
+   * Réservé à l'enseignant et à la direction : l'appel se constate en classe.
+   * Le secrétariat garde la consultation, la justification a posteriori et la
+   * suppression, mais ne constate pas lui-même les absences.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.TEACHER)
   @Post()
   async record(
     @Body() dto: RecordAbsencesDto,

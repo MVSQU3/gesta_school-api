@@ -68,6 +68,75 @@ export class EvaluationsService {
     }
   }
 
+  /**
+   * Normalise un intitulé pour la comparaison : casse, espaces multiples et
+   * accents écartés. « Devoir n°1 » et « DEVOIR N°1  » désignent le même
+   * devoir, et ne doivent pas coexister dans la même période.
+   */
+  private normalizeTitle(title: string): string {
+    return title
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  /**
+   * Refuse un second exemplaire de la même évaluation.
+   *
+   * Sans ce contrôle, rien n'empêche de créer dix fois « Devoir n°1 » dans la
+   * même matière et la même période : chaque exemplaire porte sa propre série
+   * de notes, et le bulletin cumule des moyennes concurrentes sans que
+   * personne ne sache laquelle fait foi.
+   *
+   * @param excludeId Évaluation en cours de modification, exclue de la recherche.
+   */
+  private async assertNoDuplicate(
+    schoolId: string,
+    classRoomId: string,
+    subjectId: string,
+    gradingPeriodId: string,
+    type: EvaluationType,
+    title: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const siblings = await this.evaluationRepository.find({
+      where: { schoolId, classRoomId, subjectId, gradingPeriodId, type },
+      select: { id: true, title: true },
+    });
+
+    const normalized = this.normalizeTitle(title);
+    const duplicate = siblings.find(
+      (e) => e.id !== excludeId && this.normalizeTitle(e.title) === normalized,
+    );
+
+    if (duplicate) {
+      throw new ConflictException(
+        `Une évaluation « ${title.trim()} » existe déjà dans cette matière pour cette période. Ouvrez-la pour en corriger les notes, ou donnez un autre intitulé.`,
+      );
+    }
+  }
+
+  /**
+   * L'évaluation doit tomber dans sa propre période de notation : un devoir du
+   * 2e trimestre daté de janvier alors que la période court de mars à juin
+   * fausse le bulletin sur lequel il apparaît.
+   */
+  private assertDateWithinPeriod(period: GradingPeriod, date: string): void {
+    if (!period.startDate || !period.endDate) return;
+
+    const day = date.slice(0, 10);
+    const start = String(period.startDate).slice(0, 10);
+    const end = String(period.endDate).slice(0, 10);
+
+    if (day < start || day > end) {
+      throw new BadRequestException(
+        `La date du ${day} est en dehors de la période ${period.label} (du ${start} au ${end}).`,
+      );
+    }
+  }
+
   /** Le barème doit rester cohérent avec le type d'évaluation. */
   private resolveMaxScore(type: EvaluationType, maxScore?: number): number {
     if (type === EvaluationType.DEVOIR) {
@@ -101,7 +170,11 @@ export class EvaluationsService {
     // La matière doit figurer au programme de la classe, sinon elle n'a ni
     // coefficient ni place sur le bulletin.
     const program = await this.programRepository.findOne({
-      where: { classRoomId: dto.classRoomId, subjectId: dto.subjectId, schoolId },
+      where: {
+        classRoomId: dto.classRoomId,
+        subjectId: dto.subjectId,
+        schoolId,
+      },
     });
     if (!program) {
       throw new ConflictException(
@@ -114,6 +187,16 @@ export class EvaluationsService {
       dto.classRoomId,
       dto.subjectId,
       period.academicYearId,
+    );
+
+    this.assertDateWithinPeriod(period, dto.date);
+    await this.assertNoDuplicate(
+      schoolId,
+      dto.classRoomId,
+      dto.subjectId,
+      dto.gradingPeriodId,
+      dto.type,
+      dto.title,
     );
 
     const evaluation = this.evaluationRepository.create({
@@ -212,6 +295,24 @@ export class EvaluationsService {
       evaluation.subjectId,
       evaluation.gradingPeriod.academicYearId,
     );
+
+    if (dto.date) {
+      this.assertDateWithinPeriod(evaluation.gradingPeriod, dto.date);
+    }
+
+    // Renommer ou changer de type peut recréer un doublon aussi sûrement
+    // qu'une seconde création : le contrôle vaut aussi à la modification.
+    if (dto.title || dto.type) {
+      await this.assertNoDuplicate(
+        schoolId,
+        evaluation.classRoomId,
+        evaluation.subjectId,
+        evaluation.gradingPeriodId,
+        dto.type ?? evaluation.type,
+        dto.title ?? evaluation.title,
+        evaluation.id,
+      );
+    }
 
     if (dto.title) evaluation.title = dto.title;
     if (dto.date) evaluation.date = new Date(dto.date);
@@ -347,7 +448,11 @@ export class EvaluationsService {
     }
 
     for (const entry of dto.grades) {
-      if (!entry.isAbsent && entry.score !== null && entry.score !== undefined) {
+      if (
+        !entry.isAbsent &&
+        entry.score !== null &&
+        entry.score !== undefined
+      ) {
         if (entry.score > evaluation.maxScore) {
           throw new BadRequestException(
             `Une note de ${entry.score} dépasse le barème de l'évaluation (sur ${evaluation.maxScore}).`,

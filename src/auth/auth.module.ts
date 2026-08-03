@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { RateLimitGuard } from '../common/security/rate-limit.guard';
 
 @Module({
   imports: [
@@ -16,7 +17,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  // RateLimitGuard est déclaré ici pour être un singleton du module : le
+  // compteur de tentatives vit dans l'instance, une instanciation par requête
+  // le remettrait à zéro à chaque appel et le rendrait inopérant.
+  providers: [AuthService, JwtStrategy, RateLimitGuard],
   exports: [AuthService],
 })
 export class AuthModule {}
