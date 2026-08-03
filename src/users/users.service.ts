@@ -25,7 +25,27 @@ export class UsersService {
     private schoolRepository: Repository<School>,
   ) { }
 
+  /**
+   * Création d'un compte du personnel d'un établissement.
+   *
+   * Les rôles sont filtrés ici, et pas seulement à l'écran : cet endpoint est
+   * ouvert aux directeurs, or le rôle SUPER_ADMIN donne accès à TOUS les
+   * établissements. Sans ce contrôle, un directeur pouvait se fabriquer un
+   * compte d'administration de la plateforme et prendre la main sur les
+   * écoles voisines. La modification d'un compte le refusait déjà — la
+   * création ne le refusait pas.
+   */
   async createStaff(createUserDto: CreateUserDto, schoolId: string): Promise<User> {
+    if (createUserDto.roles.includes(Role.SUPER_ADMIN)) {
+      throw new ForbiddenException(
+        "Le rôle d'administrateur de la plateforme ne peut pas être attribué à un compte d'établissement.",
+      );
+    }
+
+    if (createUserDto.roles.length === 0) {
+      throw new BadRequestException('Au moins un rôle est obligatoire.');
+    }
+
     const school = await this.schoolRepository.findOne({ where: { id: schoolId } });
     if (!school) {
       throw new NotFoundException(`Un établissement avec l'identifiant ${schoolId} n'a pas été trouvé.`)

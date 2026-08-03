@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Not, Repository } from "typeorm";
 import { CreateSchoolDto, CreateStudentDto, CreateUserDto } from "../dto/index";
@@ -197,11 +197,49 @@ export class AdminService implements OnModuleInit {
   // ----- USERS (staff) -----
 
   /**
-   * Création d'un utilisateur staff (directeur, secrétaire, comptable) par l'admin.
-   * L'admin doit obligatoirement indiquer l'école cible via createUserDto.schoolId.
-   * Le slug est résolu automatiquement depuis l'école.
+   * Création d'un compte par l'administrateur de la plateforme.
+   *
+   * Deux cas distincts :
+   *  - compte d'établissement (directeur, secrétaire, comptable, enseignant) :
+   *    l'école cible est obligatoire ;
+   *  - compte d'administration de la plateforme : il n'est rattaché à AUCUNE
+   *    école. Un SUPER_ADMIN porteur d'un schoolId serait trompeur, puisque
+   *    son pouvoir s'étend de toute façon à tous les établissements.
+   *
+   * Cette route est réservée au SUPER_ADMIN par le contrôleur : c'est le seul
+   * endroit où le rôle d'administration peut être attribué.
    */
   async createUser(createUserDto: CreateUserDto): Promise<User> {
+    if (createUserDto.roles.length === 0) {
+      throw new BadRequestException('Au moins un rôle est obligatoire.');
+    }
+
+    const isPlatformAdmin = createUserDto.roles.includes(Role.SUPER_ADMIN);
+
+    if (isPlatformAdmin && createUserDto.roles.length > 1) {
+      throw new BadRequestException(
+        "Le rôle d'administrateur de la plateforme ne se combine avec aucun rôle d'établissement.",
+      );
+    }
+
+    const existing = await this.usersRepository.findOne({ where: { email: createUserDto.email } });
+    if (existing) {
+      throw new ConflictException('Un utilisateur avec cet email existe déjà.');
+    }
+
+    const passwordHash = await bcrypt.hash(createUserDto.password, 12);
+
+    if (isPlatformAdmin) {
+      // slug et schoolId sont volontairement omis : le compte n'appartient à
+      // aucun établissement.
+      const admin = this.usersRepository.create({
+        email: createUserDto.email,
+        passwordHash,
+        roles: [Role.SUPER_ADMIN],
+      });
+      return await this.usersRepository.save(admin);
+    }
+
     if (!createUserDto.schoolId) {
       throw new NotFoundException("L'admin doit spécifier l'école cible (schoolId) lors de la création d'un utilisateur.");
     }
@@ -211,12 +249,6 @@ export class AdminService implements OnModuleInit {
       throw new NotFoundException(`Un établissement avec l'identifiant ${createUserDto.schoolId} n'a pas été trouvé.`);
     }
 
-    const existing = await this.usersRepository.findOne({ where: { email: createUserDto.email } });
-    if (existing) {
-      throw new ConflictException('Un utilisateur avec cet email existe déjà.');
-    }
-
-    const passwordHash = await bcrypt.hash(createUserDto.password, 12);
     const user = this.usersRepository.create({
       email: createUserDto.email,
       passwordHash,

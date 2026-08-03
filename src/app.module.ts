@@ -1,4 +1,4 @@
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AcademicYearsModule } from './academic-years/academic-years.module';
@@ -22,7 +22,6 @@ import { EvaluationsModule } from './evaluations/evaluations.module';
 import { AbsencesModule } from './absences/absences.module';
 import { BulletinsModule } from './bulletins/bulletins.module';
 import { HealthModule } from './health/health.module';
-import { SecurityHeadersMiddleware } from './common/security/security-headers.middleware';
 
 @Module({
   imports: [
@@ -79,8 +78,4 @@ import { SecurityHeadersMiddleware } from './common/security/security-headers.mi
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer.apply(SecurityHeadersMiddleware).forRoutes('*');
-  }
-}
+export class AppModule { }

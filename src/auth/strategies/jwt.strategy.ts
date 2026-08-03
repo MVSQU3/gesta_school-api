@@ -1,8 +1,10 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import type { Request } from 'express';
 import { Role } from '../../common/enums/role.enum';
 import { UsersService } from '../../users/users.service';
+import { SESSION_COOKIE } from '../auth-cookie';
 
 export interface JwtPayload {
   sub: string;
@@ -18,7 +20,19 @@ export interface JwtPayload {
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly usersService: UsersService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      /**
+       * Le cookie de session est lu en priorité : c'est le mode d'usage de
+       * l'interface web, où le jeton reste hors de portée du JavaScript.
+       *
+       * L'en-tête `Authorization` reste accepté en second, pour les clients
+       * non-navigateur — scripts d'intégration, sondes, outils de test. Il
+       * n'affaiblit rien : il n'y a plus de jeton à dérober côté navigateur.
+       */
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (req: Request & { cookies?: Record<string, string> }) =>
+          req?.cookies?.[SESSION_COOKIE] ?? null,
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       ignoreExpiration: false,
       secretOrKey: process.env.JWT_SECRET as string,
     });
