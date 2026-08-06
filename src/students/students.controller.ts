@@ -74,7 +74,7 @@ export class StudentsController {
     if (!schoolId) {
       throw new ForbiddenException('Accès refusé : aucune école spécifiée.');
     }
-    return this.studentsService.update(studentId, dto, schoolId);
+    return this.studentsService.update(studentId, dto, schoolId, user);
   }
 
   /**

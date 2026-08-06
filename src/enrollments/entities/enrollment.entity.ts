@@ -25,6 +25,17 @@ export enum EnrollmentStatus {
   EXPIRED = 'EXPIRED',
 }
 
+/**
+ * Libellés lisibles des statuts, pour les documents destinés à un humain.
+ * « PARTIALLY_PAID » n'a pas sa place dans un tableau remis à la direction.
+ */
+export const ENROLLMENT_STATUS_LABELS: Record<EnrollmentStatus, string> = {
+  [EnrollmentStatus.PENDING_PAYMENT]: 'En attente de paiement',
+  [EnrollmentStatus.PARTIALLY_PAID]: 'Partiellement réglé',
+  [EnrollmentStatus.ENROLLED]: 'Intégralement réglé',
+  [EnrollmentStatus.EXPIRED]: 'Expiré',
+};
+
 @Entity('enrollments')
 export class Enrollment {
   @PrimaryGeneratedColumn('uuid')

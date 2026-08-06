@@ -104,6 +104,9 @@ const CHUNK_SIZE = 500;
  * le RESTART IDENTITY d'un TRUNCATE unique règlent les dépendances.
  */
 const TABLES = [
+  // Le journal d'audit est vidé explicitement : le CASCADE depuis `schools`
+  // n'emporterait pas les lignes du super-administrateur (schoolId NULL).
+  'audit_logs',
   'grades',
   'evaluations',
   'absences',

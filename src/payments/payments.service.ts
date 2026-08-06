@@ -429,6 +429,45 @@ export class PaymentsService {
   }
 
   /**
+   * Journal de caisse complet d'une période, pour export tableur.
+   *
+   * Sans pagination, contrairement à l'affichage : un journal exporté sur une
+   * page de vingt-cinq lignes ne servirait à rien à la comptabilité. Les
+   * versements annulés sont inclus — c'est précisément ce qu'un contrôle vient
+   * vérifier — avec leur motif et leur auteur.
+   */
+  async findJournalForExport(
+    schoolId: string,
+    query: QueryPaymentsDto,
+  ): Promise<Payment[]> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const { start, end } = this.resolvePeriod(query.from, query.to);
+
+    const qb = this.paymentRepository
+      .createQueryBuilder('payment')
+      .leftJoinAndSelect('payment.receivedByUser', 'cashier')
+      .leftJoinAndSelect('payment.cancelledByUser', 'canceller')
+      .leftJoinAndSelect('payment.enrollment', 'enrollment')
+      .leftJoinAndSelect('enrollment.student', 'student')
+      .leftJoinAndSelect('enrollment.classRoom', 'classRoom')
+      .leftJoinAndSelect('enrollment.academicYear', 'academicYear')
+      .where('payment.schoolId = :schoolId', { schoolId })
+      .andWhere('payment.paidAt BETWEEN :start AND :end', { start, end });
+
+    if (query.method) {
+      qb.andWhere('payment.method = :method', { method: query.method });
+    }
+    if (query.receivedByUserId) {
+      qb.andWhere('payment."receivedByUserId" = :receivedByUserId', {
+        receivedByUserId: query.receivedByUserId,
+      });
+    }
+
+    return await qb.orderBy('payment.paidAt', 'ASC').getMany();
+  }
+
+  /**
    * Historique des versements d'une inscription (l'échéancier), du plus ancien
    * au plus récent, avec le caissier ayant encaissé chacun d'eux.
    */

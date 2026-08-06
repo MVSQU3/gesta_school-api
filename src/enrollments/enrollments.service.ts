@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, Not, Repository } from 'typeorm';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import {
   BalanceService,
   EnrollmentBalance,
@@ -48,6 +51,7 @@ export class EnrollmentsService {
     private readonly studentsService: StudentsService,
     private readonly referencesService: ReferencesService,
     private readonly balanceService: BalanceService,
+    private readonly auditService: AuditService,
   ) { }
 
   /**
@@ -248,6 +252,7 @@ export class EnrollmentsService {
     dto: BulkEnrollDto,
     schoolId: string,
     createdByUserId: string | null = null,
+    actor?: AuthUser,
   ): Promise<{
     created: Array<{ studentId: string; reference: string; name: string }>;
     skipped: Array<{ studentId: string; name: string; reason: string }>;
@@ -320,6 +325,27 @@ export class EnrollmentsService {
       }
     }
 
+    // Une seule ligne pour le lot, et non trente : le journal doit rester
+    // lisible, et c'est bien une decision unique qui a ete prise.
+    if (created.length > 0) {
+      void this.auditService.record(
+        {
+          action: AuditAction.ENROLLMENT_BULK_CREATED,
+          entityType: 'enrollments',
+          entityId: null,
+          schoolId,
+          summary: `Reinscription en masse : ${created.length} dossier(s) ouverts en ${classRoom.name} pour ${academicYear.label}${skipped.length ? `, ${skipped.length} ecarte(s)` : ''}`,
+          changes: {
+            references: {
+              before: null,
+              after: created.map((c) => c.reference),
+            },
+          },
+        },
+        actor,
+      );
+    }
+
     return { created, skipped };
   }
 
@@ -359,6 +385,7 @@ export class EnrollmentsService {
     id: string,
     dto: UpdateEnrollmentDto,
     schoolId: string,
+    actor?: AuthUser,
   ): Promise<EnrollmentWithBalance> {
     if (!schoolId) throw new ForbiddenException('schoolId est requis');
 
@@ -391,6 +418,15 @@ export class EnrollmentsService {
       );
     }
 
+    const previousClassRoom = await this.classRoomRepository.findOne({
+      where: { id: enrollment.classRoomId },
+    });
+    const before = {
+      classRoom: previousClassRoom?.name ?? null,
+      totalDue: Number(enrollment.totalDue),
+      status: enrollment.status,
+    };
+
     enrollment.classRoomId = classRoom.id;
     enrollment.totalDue = newTotalDue;
 
@@ -405,6 +441,23 @@ export class EnrollmentsService {
     }
 
     await this.enrollmentRepository.save(enrollment);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.ENROLLMENT_UPDATED,
+        entityType: 'enrollments',
+        entityId: enrollment.id,
+        schoolId,
+        summary: `Dossier ${enrollment.reference} deplace de ${before.classRoom ?? '?'} vers ${classRoom.name}`,
+        changes: this.auditService.diff(before, {
+          classRoom: classRoom.name,
+          totalDue: newTotalDue,
+          status: enrollment.status,
+        }),
+      },
+      actor,
+    );
+
     return await this.findByReference(schoolId, enrollment.reference);
   }
 
@@ -424,7 +477,11 @@ export class EnrollmentsService {
    * (cascade en base) — c'est cohérent, elles n'ont de sens que rattachées à
    * une inscription.
    */
-  async remove(id: string, schoolId: string): Promise<{ message: string }> {
+  async remove(
+    id: string,
+    schoolId: string,
+    actor?: AuthUser,
+  ): Promise<{ message: string }> {
     if (!schoolId) throw new ForbiddenException('schoolId est requis');
 
     const enrollment = await this.enrollmentRepository.findOne({
@@ -446,11 +503,54 @@ export class EnrollmentsService {
     }
 
     const label = `${enrollment.student?.lastName ?? ''} ${enrollment.student?.firstName ?? ''}`.trim();
+    const reference = enrollment.reference;
     await this.enrollmentRepository.remove(enrollment);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.ENROLLMENT_DELETED,
+        entityType: 'enrollments',
+        entityId: id,
+        schoolId,
+        summary: `Dossier ${reference} supprime${label ? ` (${label})` : ''} — aucun versement rattache`,
+      },
+      actor,
+    );
 
     return {
       message: `Le dossier ${enrollment.reference}${label ? ` (${label})` : ''} a été supprimé. La fiche de l'élève est conservée.`,
     };
+  }
+
+  /**
+   * Tous les dossiers correspondant aux filtres, sans pagination, pour export
+   * tableur.
+   *
+   * S'appuie sur `findAll` plutôt que de reconstruire la requête : les filtres
+   * et le calcul du solde restent définis à un seul endroit. La pagination est
+   * simplement parcourue jusqu'à épuisement, par tranches larges — un
+   * établissement compte quelques centaines de dossiers par année, deux ou
+   * trois requêtes suffisent.
+   */
+  async findAllForExport(
+    schoolId: string,
+    query: QueryEnrollmentsDto,
+  ): Promise<EnrollmentWithBalance[]> {
+    const pageSize = 500;
+    const all: EnrollmentWithBalance[] = [];
+
+    for (let page = 1; ; page++) {
+      const result = await this.findAll(schoolId, {
+        ...query,
+        page,
+        limit: pageSize,
+      });
+      all.push(...result.items);
+
+      if (result.items.length < pageSize || page >= result.totalPages) break;
+    }
+
+    return all;
   }
 
   async findAllExpired(): Promise<Enrollment[]> {

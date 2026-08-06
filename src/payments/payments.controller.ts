@@ -1,11 +1,12 @@
 import { Body, Controller, Get, Param, Patch, Post, Res, UseGuards, Query, ForbiddenException } from '@nestjs/common';
 import type { Response } from 'express';
+import { CsvService } from '../common/export/csv.service';
 import { PdfService } from '../common/pdf/pdf.service';
 import { buildReceiptPdf } from './receipt.pdf';
 import { CancelPaymentDto } from './dto/cancel-payment.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { QueryPaymentsDto } from './dto/query-payments.dto';
-import { Payment } from './entities/payment.entity';
+import { Payment, PAYMENT_METHOD_LABELS } from './entities/payment.entity';
 import { PaymentsService } from './payments.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -19,6 +20,7 @@ export class PaymentsController {
   constructor(
     private readonly paymentsService: PaymentsService,
     private readonly pdfService: PdfService,
+    private readonly csvService: CsvService,
   ) {}
 
   /**
@@ -55,6 +57,57 @@ export class PaymentsController {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
     return await this.paymentsService.findJournal(schoolId, query);
+  }
+
+
+  /**
+   * Journal de caisse au format tableur, sur la même période et les mêmes
+   * filtres que l'affichage. Les versements annulés y figurent avec leur
+   * motif : c'est ce qu'un contrôle vient vérifier.
+   *
+   * Déclarée avant `@Get(':id')`, sans quoi la route paramétrée capturerait
+   * le segment `export`.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.ACCOUNTANT)
+  @Get('export')
+  async exportJournal(
+    @Query() query: QueryPaymentsDto,
+    @Res() res: Response,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<void> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+
+    const payments = await this.paymentsService.findJournalForExport(schoolId, query);
+
+    const csv = this.csvService.build<Payment>(
+      [
+        { header: 'Date', value: (p) => p.paidAt },
+        { header: 'N° reçu', value: (p) => p.receiptNumber },
+        { header: 'Référence dossier', value: (p) => p.enrollment?.reference },
+        { header: 'Nom', value: (p) => p.enrollment?.student?.lastName },
+        { header: 'Prénom', value: (p) => p.enrollment?.student?.firstName },
+        { header: 'Classe', value: (p) => p.enrollment?.classRoom?.name },
+        { header: 'Année scolaire', value: (p) => p.enrollment?.academicYear?.label },
+        { header: 'Montant (FCFA)', value: (p) => Number(p.amount) },
+        { header: 'Mode de règlement', value: (p) => PAYMENT_METHOD_LABELS[p.method] },
+        { header: 'Encaissé par', value: (p) => p.receivedByUser?.email },
+        { header: 'Annulé', value: (p) => (p.cancelledAt ? 'OUI' : 'NON') },
+        { header: "Date d'annulation", value: (p) => p.cancelledAt },
+        { header: "Type d'annulation", value: (p) => p.cancellationType },
+        { header: "Motif d'annulation", value: (p) => p.cancellationReason },
+        { header: 'Annulé par', value: (p) => p.cancelledByUser?.email },
+      ],
+      payments,
+    );
+
+    const filenameSlug = user.slug ?? 'ECOLE';
+    const filename = this.csvService.filename('journal-caisse', filenameSlug);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
   }
 
   /**

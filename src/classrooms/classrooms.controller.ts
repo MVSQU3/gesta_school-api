@@ -18,9 +18,13 @@ export class ClassRoomsController {
   @Post()
   async create(
     @Body() createClassRoomDto: CreateClassRoomDto,
-    @CurrentUser('schoolId') schoolId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<ClassRoom> {
-    return await this.classRoomsService.create(createClassRoomDto, schoolId);
+    return await this.classRoomsService.create(
+      createClassRoomDto,
+      user.schoolId,
+      user,
+    );
   }
 
   @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.ACCOUNTANT)
@@ -61,7 +65,7 @@ export class ClassRoomsController {
   ): Promise<ClassRoom> {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.classRoomsService.update(id, updateClassRoomDto, schoolId);
+    return await this.classRoomsService.update(id, updateClassRoomDto, schoolId, user);
   }
 
   /**
@@ -76,6 +80,6 @@ export class ClassRoomsController {
   ): Promise<{ message: string }> {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.classRoomsService.remove(id, schoolId);
+    return await this.classRoomsService.remove(id, schoolId, user);
   }
 }

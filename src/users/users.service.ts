@@ -1,3 +1,6 @@
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import {
   BadRequestException,
   ConflictException,
@@ -23,6 +26,7 @@ export class UsersService {
     private usersRepository: Repository<User>,
     @InjectRepository(School)
     private schoolRepository: Repository<School>,
+    private readonly auditService: AuditService,
   ) { }
 
   /**
@@ -35,7 +39,11 @@ export class UsersService {
    * écoles voisines. La modification d'un compte le refusait déjà — la
    * création ne le refusait pas.
    */
-  async createStaff(createUserDto: CreateUserDto, schoolId: string): Promise<User> {
+  async createStaff(
+    createUserDto: CreateUserDto,
+    schoolId: string,
+    actor?: AuthUser,
+  ): Promise<User> {
     if (createUserDto.roles.includes(Role.SUPER_ADMIN)) {
       throw new ForbiddenException(
         "Le rôle d'administrateur de la plateforme ne peut pas être attribué à un compte d'établissement.",
@@ -68,7 +76,20 @@ export class UsersService {
       schoolId: school.id,
     });
 
-    return this.usersRepository.save(user);
+    const saved = await this.usersRepository.save(user);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.USER_CREATED,
+        entityType: 'users',
+        entityId: saved.id,
+        schoolId,
+        summary: `Compte ${saved.email} cree (${saved.roles.join(', ')})`,
+      },
+      actor,
+    );
+
+    return saved;
   }
 
   /**
@@ -155,6 +176,7 @@ export class UsersService {
     newPassword: string | undefined,
     schoolId: string,
     requesterId: string,
+    actor?: AuthUser,
   ): Promise<{ message: string; email: string; temporaryPassword: string }> {
     const user = await this.findStaffOfSchool(id, schoolId);
 
@@ -173,6 +195,20 @@ export class UsersService {
     // Provisoire : l'intéressé devra le remplacer dès sa prochaine connexion
     user.mustChangePassword = true;
     await this.usersRepository.save(user);
+
+    // Le mot de passe provisoire lui-même n'est evidemment pas journalise :
+    // le journal est consultable, il ne doit pas devenir un annuaire de
+    // secrets. Seul le fait qu'une reinitialisation a eu lieu est trace.
+    void this.auditService.record(
+      {
+        action: AuditAction.USER_PASSWORD_RESET,
+        entityType: 'users',
+        entityId: user.id,
+        schoolId,
+        summary: `Mot de passe de ${user.email} reinitialise ; ses sessions ouvertes ont ete fermees`,
+      },
+      actor,
+    );
 
     return {
       message: `Mot de passe de ${user.email} réinitialisé. Ses sessions ouvertes ont été fermées ; il devra choisir un nouveau mot de passe à sa prochaine connexion.`,
@@ -223,8 +259,13 @@ export class UsersService {
     updateUserDto: UpdateUserDto,
     schoolId: string,
     requesterId: string,
+    actor?: AuthUser,
   ): Promise<User> {
     const user = await this.findStaffOfSchool(id, schoolId);
+
+    // Capture AVANT toute mutation : plus bas, `user.email` est écrasé sur
+    // place, et relire l'état à ce moment-là ne montrerait plus aucun écart.
+    const before = { email: user.email, roles: [...user.roles] };
 
     if (updateUserDto.roles?.includes(Role.SUPER_ADMIN)) {
       throw new ForbiddenException(
@@ -258,7 +299,29 @@ export class UsersService {
       user.roles = updateUserDto.roles;
     }
 
-    return await this.usersRepository.save(user);
+    const saved = await this.usersRepository.save(user);
+    const changes = this.auditService.diff(before, {
+      email: saved.email,
+      roles: saved.roles,
+    });
+
+    if (changes) {
+      void this.auditService.record(
+        {
+          action: AuditAction.USER_UPDATED,
+          entityType: 'users',
+          entityId: saved.id,
+          schoolId,
+          summary: changes.roles
+            ? `Roles de ${saved.email} : ${before.roles.join(', ')} -> ${saved.roles.join(', ')}`
+            : `Compte ${before.email} renomme en ${saved.email}`,
+          changes,
+        },
+        actor,
+      );
+    }
+
+    return saved;
   }
 
   /**
@@ -270,6 +333,7 @@ export class UsersService {
     isActive: boolean,
     schoolId: string,
     requesterId: string,
+    actor?: AuthUser,
   ): Promise<User> {
     const user = await this.findStaffOfSchool(id, schoolId);
 
@@ -297,7 +361,21 @@ export class UsersService {
     }
 
     user.isActive = isActive;
-    return await this.usersRepository.save(user);
+    const saved = await this.usersRepository.save(user);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.USER_STATUS_CHANGED,
+        entityType: 'users',
+        entityId: saved.id,
+        schoolId,
+        summary: `Compte ${saved.email} ${isActive ? 'reactive' : 'desactive'}`,
+        changes: { isActive: { before: !isActive, after: isActive } },
+      },
+      actor,
+    );
+
+    return saved;
   }
 
   /**
@@ -312,6 +390,7 @@ export class UsersService {
     id: string,
     schoolId: string,
     requesterId: string,
+    actor?: AuthUser,
   ): Promise<{ message: string }> {
     const user = await this.findStaffOfSchool(id, schoolId);
 
@@ -336,7 +415,21 @@ export class UsersService {
       }
     }
 
+    const removedEmail = user.email;
+    const removedRoles = [...user.roles];
     await this.usersRepository.remove(user);
-    return { message: `Le compte ${user.email} a été supprimé.` };
+
+    void this.auditService.record(
+      {
+        action: AuditAction.USER_DELETED,
+        entityType: 'users',
+        entityId: id,
+        schoolId,
+        summary: `Compte ${removedEmail} supprime (${removedRoles.join(', ')})`,
+      },
+      actor,
+    );
+
+    return { message: `Le compte ${removedEmail} a été supprimé.` };
   }
 }

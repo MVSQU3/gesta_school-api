@@ -50,6 +50,7 @@ export class GradingPeriodsController {
       id,
       dto,
       resolveSchoolId(user, querySchoolId),
+      user,
     );
   }
 

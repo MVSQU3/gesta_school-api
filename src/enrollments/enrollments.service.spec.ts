@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { AuditService } from '../audit/audit.service';
 import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
@@ -107,6 +108,12 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
         {
           provide: BalanceService,
           useValue: mockBalanceService,
+        },
+        {
+          // Le journal d'audit n'est pas l'objet de ces tests : un double
+          // silencieux suffit, l'écriture étant volontairement non bloquante.
+          provide: AuditService,
+          useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
         },
       ],
     }).compile();

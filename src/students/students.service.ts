@@ -6,6 +6,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { Student } from './entities/student.entity';
@@ -18,6 +21,7 @@ export class StudentsService {
     private readonly studentRepository: Repository<Student>,
     @InjectRepository(AcademicYear)
     private readonly academicYearRepository: Repository<AcademicYear>,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -152,6 +156,7 @@ export class StudentsService {
     studentId: string,
     dto: UpdateStudentDto,
     schoolId: string,
+    actor?: AuthUser,
   ): Promise<Student> {
     if (!schoolId) throw new UnauthorizedException('Accès refusé.');
 
@@ -197,12 +202,41 @@ export class StudentsService {
       }
     }
 
+    const before = {
+      lastName: student.lastName,
+      firstName: student.firstName,
+      birthDay: String(student.birthDay),
+      parentPhone: student.parentPhone,
+    };
+
     student.firstName = firstName;
     student.lastName = lastName;
     student.birthDay = birthDay;
     if (dto.parentPhone) student.parentPhone = dto.parentPhone;
 
-    return await this.studentRepository.save(student);
+    const saved = await this.studentRepository.save(student);
+    const changes = this.auditService.diff(before, {
+      lastName: saved.lastName,
+      firstName: saved.firstName,
+      birthDay: String(saved.birthDay),
+      parentPhone: saved.parentPhone,
+    });
+
+    if (changes) {
+      void this.auditService.record(
+        {
+          action: AuditAction.STUDENT_UPDATED,
+          entityType: 'students',
+          entityId: saved.id,
+          schoolId,
+          summary: `Fiche de ${before.lastName} ${before.firstName} corrigee (${Object.keys(changes).join(', ')})`,
+          changes,
+        },
+        actor,
+      );
+    }
+
+    return saved;
   }
 
   async findAllBySchool(

@@ -18,6 +18,17 @@ export enum PaymentMethod {
   BANK_TRANSFER = 'BANK_TRANSFER',
 }
 
+/**
+ * Libellés lisibles des modes de règlement, pour les documents destinés à un
+ * humain — export tableur, reçu PDF. L'énumération technique ne convient pas :
+ * « MOBILE_MONEY » n'a pas sa place sur une pièce comptable.
+ */
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  [PaymentMethod.CASH]: 'Espèces',
+  [PaymentMethod.MOBILE_MONEY]: 'Mobile Money',
+  [PaymentMethod.BANK_TRANSFER]: 'Virement bancaire',
+};
+
 export enum CancellationType {
   /** Erreur de saisie : l'argent n'a en réalité jamais été encaissé. */
   ERROR = 'ERROR',

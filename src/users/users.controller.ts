@@ -49,6 +49,7 @@ export class UsersController {
     return await this.usersService.createStaff(
       createUserDto,
       this.resolveSchoolId(user, querySchoolId),
+      user,
     );
   }
 
@@ -82,6 +83,7 @@ export class UsersController {
       updateUserDto,
       this.resolveSchoolId(user, querySchoolId),
       user.id,
+      user,
     );
   }
 
@@ -101,6 +103,7 @@ export class UsersController {
       dto.isActive,
       this.resolveSchoolId(user, querySchoolId),
       user.id,
+      user,
     );
   }
 
@@ -121,6 +124,7 @@ export class UsersController {
       dto.newPassword,
       this.resolveSchoolId(user, querySchoolId),
       user.id,
+      user,
     );
   }
 
@@ -138,6 +142,7 @@ export class UsersController {
       id,
       this.resolveSchoolId(user, querySchoolId),
       user.id,
+      user,
     );
   }
 }

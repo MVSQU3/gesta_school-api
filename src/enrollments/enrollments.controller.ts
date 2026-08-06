@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Res,
   Param,
   Patch,
   Post,
@@ -10,6 +11,9 @@ import {
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { CsvService } from '../common/export/csv.service';
+import { ENROLLMENT_STATUS_LABELS } from './entities/enrollment.entity';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -26,7 +30,10 @@ import { AuthUser, CurrentUser } from 'src/common/decorators/current-user.decora
 @Controller('api/v1/enrollments')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class EnrollmentsController {
-  constructor(private readonly enrollmentsService: EnrollmentsService) {}
+  constructor(
+    private readonly enrollmentsService: EnrollmentsService,
+    private readonly csvService: CsvService,
+  ) {}
 
   /**
    * Saisie d'une nouvelle inscription au secrétariat et génération du jeton 72h
@@ -60,7 +67,58 @@ export class EnrollmentsController {
   ) {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.enrollmentsService.bulkEnroll(dto, schoolId, user.id);
+    return await this.enrollmentsService.bulkEnroll(dto, schoolId, user.id, user);
+  }
+
+
+  /**
+   * État des dossiers au format tableur, avec la situation financière de
+   * chacun : c'est le document de relance des familles, et la base du
+   * rapprochement comptable en fin de période.
+   *
+   * Les mêmes filtres que la liste s'appliquent — classe, année, statut,
+   * recherche — mais sans pagination.
+   *
+   * Déclarée avant `@Get('expired')` et `@Get('ref/:reference')` pour rester
+   * en amont de toute route paramétrée.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.ACCOUNTANT)
+  @Get('export')
+  async exportEnrollments(
+    @Query() query: QueryEnrollmentsDto,
+    @Res() res: Response,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<void> {
+    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
+    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+
+    const dossiers = await this.enrollmentsService.findAllForExport(schoolId, query);
+
+    const csv = this.csvService.build(
+      [
+        { header: 'Référence', value: (e) => e.reference },
+        { header: 'Nom', value: (e) => e.student?.lastName },
+        { header: 'Prénom', value: (e) => e.student?.firstName },
+        { header: 'Date de naissance', value: (e) => e.student?.birthDay ? new Date(e.student.birthDay).toLocaleDateString('fr-FR') : '' },
+        { header: 'Téléphone parent', value: (e) => e.student?.parentPhone },
+        { header: 'Classe', value: (e) => e.classRoom?.name },
+        { header: 'Année scolaire', value: (e) => e.academicYear?.label },
+        { header: 'Statut', value: (e) => ENROLLMENT_STATUS_LABELS[e.status] },
+        { header: 'Total dû (FCFA)', value: (e) => e.balanceInfo.totalDue },
+        { header: 'Versé (FCFA)', value: (e) => e.balanceInfo.amountPaid },
+        { header: 'Reste à payer (FCFA)', value: (e) => e.balanceInfo.balance },
+        { header: 'Date du dossier', value: (e) => e.createdAt },
+        { header: "Échéance du jeton", value: (e) => e.expiresAt },
+      ],
+      dossiers,
+    );
+
+    const filename = this.csvService.filename('dossiers', user.slug ?? 'ECOLE');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
   }
 
   /**
@@ -164,7 +222,7 @@ export class EnrollmentsController {
   ): Promise<EnrollmentWithBalance> {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.enrollmentsService.update(id, dto, schoolId);
+    return await this.enrollmentsService.update(id, dto, schoolId, user);
   }
 
   /**
@@ -181,6 +239,6 @@ export class EnrollmentsController {
   ): Promise<{ message: string }> {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
     if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.enrollmentsService.remove(id, schoolId);
+    return await this.enrollmentsService.remove(id, schoolId, user);
   }
 }

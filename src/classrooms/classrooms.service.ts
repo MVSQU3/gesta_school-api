@@ -6,6 +6,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import { Enrollment } from '../enrollments/entities/enrollment.entity';
 import { CreateClassRoomDto } from './dto/create-classroom.dto';
 import { UpdateClassRoomDto } from './dto/update-classroom.dto';
@@ -18,11 +21,34 @@ export class ClassRoomsService {
     private readonly classRoomRepository: Repository<ClassRoom>,
     @InjectRepository(Enrollment)
     private readonly enrollmentRepository: Repository<Enrollment>,
+    private readonly auditService: AuditService,
   ) {}
 
-  async create(createClassRoomDto: CreateClassRoomDto, schoolId: string): Promise<ClassRoom> {
+  /** Montant en FCFA, lisible dans une phrase de journal. */
+  private fcfa(value: unknown): string {
+    return `${Number(value ?? 0).toLocaleString('fr-FR')} FCFA`;
+  }
+
+  async create(
+    createClassRoomDto: CreateClassRoomDto,
+    schoolId: string,
+    actor?: AuthUser,
+  ): Promise<ClassRoom> {
     const classRoom = this.classRoomRepository.create({ ...createClassRoomDto, schoolId });
-    return await this.classRoomRepository.save(classRoom);
+    const saved = await this.classRoomRepository.save(classRoom);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.CLASSROOM_CREATED,
+        entityType: 'classrooms',
+        entityId: saved.id,
+        schoolId,
+        summary: `Classe ${saved.name} créée, tarif ${this.fcfa(saved.tuitionFee)}`,
+      },
+      actor,
+    );
+
+    return saved;
   }
 
   // Utilisé par le SUPER_ADMIN quand il veut voir toutes les classes
@@ -71,10 +97,49 @@ export class ClassRoomsService {
     id: string,
     updateClassRoomDto: UpdateClassRoomDto,
     schoolId: string,
+    actor?: AuthUser,
   ): Promise<ClassRoom> {
     const classRoom = await this.findOneOfSchool(id, schoolId);
+
+    const before = {
+      name: classRoom.name,
+      level: classRoom.level,
+      tuitionFee: Number(classRoom.tuitionFee),
+    };
+
     Object.assign(classRoom, updateClassRoomDto);
-    return await this.classRoomRepository.save(classRoom);
+    const saved = await this.classRoomRepository.save(classRoom);
+
+    const after = {
+      name: saved.name,
+      level: saved.level,
+      tuitionFee: Number(saved.tuitionFee),
+    };
+    const changes = this.auditService.diff(before, after);
+
+    // Rien n'a bougé : on n'écrit pas de ligne. Un journal qui consigne les
+    // enregistrements à blanc noie les vraies modifications.
+    if (changes) {
+      // Le tarif est mis en avant dans le résumé : c'est la modification qui
+      // engage de l'argent, et celle qu'on vient chercher dans le journal.
+      const summary = changes.tuitionFee
+        ? `Tarif de la classe ${saved.name} porté de ${this.fcfa(before.tuitionFee)} à ${this.fcfa(after.tuitionFee)}`
+        : `Classe ${before.name} modifiée (${Object.keys(changes).join(', ')})`;
+
+      void this.auditService.record(
+        {
+          action: AuditAction.CLASSROOM_UPDATED,
+          entityType: 'classrooms',
+          entityId: saved.id,
+          schoolId,
+          summary,
+          changes,
+        },
+        actor,
+      );
+    }
+
+    return saved;
   }
 
   /**
@@ -84,7 +149,11 @@ export class ClassRoomsService {
    * ON DELETE RESTRICT côté base, et supprimer la classe reviendrait à
    * effacer la trace de ce qui a été facturé aux familles.
    */
-  async remove(id: string, schoolId: string): Promise<{ message: string }> {
+  async remove(
+    id: string,
+    schoolId: string,
+    actor?: AuthUser,
+  ): Promise<{ message: string }> {
     const classRoom = await this.findOneOfSchool(id, schoolId);
 
     const enrollmentCount = await this.enrollmentRepository.count({
@@ -98,6 +167,18 @@ export class ClassRoomsService {
     }
 
     await this.classRoomRepository.remove(classRoom);
+
+    void this.auditService.record(
+      {
+        action: AuditAction.CLASSROOM_DELETED,
+        entityType: 'classrooms',
+        entityId: id,
+        schoolId,
+        summary: `Classe ${classRoom.name} supprimée (tarif ${this.fcfa(classRoom.tuitionFee)})`,
+      },
+      actor,
+    );
+
     return { message: `La classe ${classRoom.name} a été supprimée.` };
   }
 }

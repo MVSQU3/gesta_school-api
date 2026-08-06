@@ -77,6 +77,57 @@ Le décompte porte sur le couple et non sur l'adresse seule — dans un
 établissement, tout le monde partage la même IP publique, et compter par IP
 bloquerait le secrétariat entier dès qu'un poste se trompe de mot de passe.
 
+## Journal d'audit
+
+Les opérations **administratives** sont tracées dans la table `audit_logs` :
+tarifs et classes, comptes du personnel (création, rôles, activation,
+réinitialisation de mot de passe, suppression), corrections de dossiers et de
+fiches élèves, réinscriptions en masse, clôtures de périodes de notation.
+
+Les **encaissements n'y figurent pas** : ils portent déjà leur propre
+traçabilité sur la ligne de paiement (caissier, date, annulation avec motif et
+auteur), qui est une pièce comptable.
+
+Principes :
+
+- **ajout seul** — aucune route d'écriture, de modification ou de suppression
+  n'est exposée ; un journal qu'on peut retoucher ne prouve rien ;
+- **jamais bloquant** — si l'écriture du journal échoue, l'opération métier
+  aboutit quand même et l'incident part dans les logs du serveur ;
+- **lisible** — chaque ligne porte une phrase composée à l'écriture (« Tarif de
+  la classe 6ème A porté de 120 000 à 135 000 FCFA ») plus le détail
+  avant/après en JSON ;
+- l'adresse de l'auteur est **recopiée** sur la ligne : elle survit à la
+  suppression du compte ;
+- consultation **réservée à la direction** (`GET /api/v1/audit`, onglet
+  « Journal d'audit » de l'espace direction), avec export CSV
+  (`GET /api/v1/audit/export`).
+
+La table est créée par la migration `AddAuditLog` : `npm run migration:run`
+avant la mise en service.
+
+## Exports tableur
+
+Deux exports, accessibles depuis l'interface (bouton « Exporter (CSV) ») ou
+directement :
+
+| Route | Contenu | Rôles |
+| --- | --- | --- |
+| `GET /api/v1/payments/export` | Journal de caisse : un versement par ligne, annulations comprises avec leur motif et leur auteur | Direction, comptabilité |
+| `GET /api/v1/enrollments/export` | État des dossiers avec la situation financière de chacun — document de relance | Direction, secrétariat, comptabilité |
+
+Les deux acceptent **les mêmes filtres que les écrans correspondants**
+(période, mode de règlement, classe, année, statut, recherche) et ignorent la
+pagination : un journal exporté sur une page de vingt-cinq lignes ne servirait
+à rien à la comptabilité.
+
+Le format est du CSV calibré pour Excel en configuration française :
+séparateur point-virgule, BOM UTF-8 (sans lui, Excel affiche « KouassiÃ© »),
+fins de ligne CRLF, dates en `JJ/MM/AAAA HH:MM`. Le fichier s'ouvre d'un
+double-clic dans Excel comme dans LibreOffice. Un vrai `.xlsx` demanderait une
+dépendance supplémentaire ; le CSV reste par ailleurs réimportable dans
+n'importe quel outil comptable.
+
 ## Jeu de données de démonstration
 
 Le script `src/seeds/seed.ts` peuple une base **déjà migrée** (`npm run migration:run`)

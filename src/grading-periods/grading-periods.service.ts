@@ -4,6 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Evaluation } from '../evaluations/entities/evaluation.entity';
@@ -26,6 +29,7 @@ export class GradingPeriodsService {
     private readonly schoolRepository: Repository<School>,
     @InjectRepository(Evaluation)
     private readonly evaluationRepository: Repository<Evaluation>,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -94,10 +98,60 @@ export class GradingPeriodsService {
     id: string,
     dto: UpdateGradingPeriodDto,
     schoolId: string,
+    actor?: AuthUser,
   ): Promise<GradingPeriod> {
     const period = await this.findOneOfSchool(id, schoolId);
-    Object.assign(period, dto);
-    return await this.periodRepository.save(period);
+
+    const before = {
+      label: period.label,
+      startDate: String(period.startDate ?? ''),
+      endDate: String(period.endDate ?? ''),
+      isClosed: period.isClosed,
+    };
+
+    // Seuls les champs réellement fournis sont recopiés.
+    //
+    // `Object.assign(period, dto)` écrasait les autres avec `undefined` : la
+    // base n'en souffrait pas — TypeORM ignore les valeurs indéfinies — mais
+    // l'objet renvoyé au client repartait sans son libellé ni ses dates, et
+    // l'écran de gestion des périodes affichait une ligne vide après chaque
+    // clôture.
+    for (const [key, value] of Object.entries(dto)) {
+      if (value !== undefined) {
+        (period as unknown as Record<string, unknown>)[key] = value;
+      }
+    }
+
+    const saved = await this.periodRepository.save(period);
+
+    const changes = this.auditService.diff(before, {
+      label: saved.label,
+      startDate: String(saved.startDate ?? ''),
+      endDate: String(saved.endDate ?? ''),
+      isClosed: saved.isClosed,
+    });
+
+    if (changes) {
+      // La cloture est mise en avant : c'est elle qui fige les bulletins et
+      // interdit toute saisie ulterieure de notes ou d'absences.
+      const summary = changes.isClosed
+        ? `Periode ${saved.label} ${saved.isClosed ? 'cloturee' : 'rouverte a la saisie'}`
+        : `Periode ${saved.label} modifiee (${Object.keys(changes).join(', ')})`;
+
+      void this.auditService.record(
+        {
+          action: AuditAction.GRADING_PERIOD_UPDATED,
+          entityType: 'grading_periods',
+          entityId: saved.id,
+          schoolId,
+          summary,
+          changes,
+        },
+        actor,
+      );
+    }
+
+    return saved;
   }
 
   /**

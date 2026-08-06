@@ -14,6 +14,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { AdminModule } from './admin/admin.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { AuditModule } from './audit/audit.module';
+import { ExportModule } from './common/export/export.module';
 import { PdfModule } from './common/pdf/pdf.module';
 import { GradingPeriodsModule } from './grading-periods/grading-periods.module';
 import { SubjectsModule } from './subjects/subjects.module';
@@ -27,6 +29,8 @@ import { HealthModule } from './health/health.module';
   imports: [
     ScheduleModule.forRoot(),
     PdfModule,
+    ExportModule,
+    AuditModule,
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
