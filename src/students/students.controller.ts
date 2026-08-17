@@ -45,6 +45,7 @@ export class StudentsController {
   history(
     @Param('studentId') studentId: string,
     @CurrentUser() user: AuthUser,
+    @Query('academicYearId') academicYearId?: string,
     @Query('schoolId') querySchoolId?: string,
   ) {
     const schoolId = user.roles.includes(Role.SUPER_ADMIN)
@@ -53,7 +54,7 @@ export class StudentsController {
     if (!schoolId) {
       throw new ForbiddenException('Accès refusé : aucune école spécifiée.');
     }
-    return this.historyService.getHistory(studentId, schoolId);
+    return this.historyService.getHistory(studentId, schoolId, academicYearId);
   }
 
   /**

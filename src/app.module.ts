@@ -23,6 +23,8 @@ import { TeachingModule } from './teaching/teaching.module';
 import { EvaluationsModule } from './evaluations/evaluations.module';
 import { AbsencesModule } from './absences/absences.module';
 import { BulletinsModule } from './bulletins/bulletins.module';
+import { ScheduleModule as TimetableModule } from './schedule/schedule.module';
+import { TransfersModule } from './transfers/transfers.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -77,6 +79,8 @@ import { HealthModule } from './health/health.module';
     EvaluationsModule,
     AbsencesModule,
     BulletinsModule,
+    TransfersModule,
+    TimetableModule,
     HealthModule,
   ],
   controllers: [AppController],
