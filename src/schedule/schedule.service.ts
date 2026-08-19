@@ -136,6 +136,7 @@ export class ScheduleService {
   async createSlot(schoolId: string, dto: CreateTimeSlotDto): Promise<TimeSlot> {
     await this.assertSlotIsSound(schoolId, dto);
 
+    console.log("log de dto.sequence", dto.sequence)
     const existing = await this.slotRepository.findOne({
       where: { schoolId, sequence: dto.sequence },
     });
