@@ -61,6 +61,7 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
       findOne: jest.fn().mockResolvedValue({
         id: 'ac-uuid-1',
         label: '2026-2027',
+        isActive: true,
       }),
     };
 

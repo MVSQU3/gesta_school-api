@@ -26,6 +26,7 @@ import { BulletinsModule } from './bulletins/bulletins.module';
 import { ScheduleModule as TimetableModule } from './schedule/schedule.module';
 import { TransfersModule } from './transfers/transfers.module';
 import { HealthModule } from './health/health.module';
+import { ParentsModule } from './parents/parents.module';
 
 @Module({
   imports: [
@@ -81,6 +82,7 @@ import { HealthModule } from './health/health.module';
     BulletinsModule,
     TransfersModule,
     TimetableModule,
+    ParentsModule,
     HealthModule,
   ],
   controllers: [AppController],

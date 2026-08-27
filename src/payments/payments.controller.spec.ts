@@ -94,6 +94,8 @@ describe('PaymentsController (caisse)', () => {
         'school-1',
         'CMB',
         'acc-1',
+        // L'acteur complet accompagne l'encaissement, pour le journal d'audit.
+        ACCOUNTANT,
       );
     });
 
@@ -121,7 +123,13 @@ describe('PaymentsController (caisse)', () => {
 
     it('applique la même règle à l’annulation', async () => {
       await controller.cancel('pay-1', {} as any, ACCOUNTANT, 'school-voisine');
-      expect(service.cancel).toHaveBeenCalledWith('pay-1', {}, 'school-1', 'acc-1');
+      expect(service.cancel).toHaveBeenCalledWith(
+        'pay-1',
+        {},
+        'school-1',
+        'acc-1',
+        ACCOUNTANT,
+      );
     });
 
     it('applique la même règle à l’échéancier', async () => {

@@ -63,10 +63,26 @@ export class AuthService {
     }
 
     if (!user.roles.includes(Role.SUPER_ADMIN)) {
-      if (!loginDto.slug) {
+      /**
+       * Le code établissement est comparé sans tenir compte de la casse ni des
+       * espaces qui l'entourent.
+       *
+       * Il est stocké en majuscules — `SchoolsService` l'y ramène à l'écriture
+       * — mais il est saisi à la main, souvent sur un clavier de téléphone qui
+       * ne bascule pas en majuscules de lui-même. Comparer strictement
+       * refusait « cmb » à qui possédait pourtant les bons identifiants, avec
+       * un message parlant d'un slug « incorrect » alors qu'il était bon.
+       *
+       * Ce n'est pas un assouplissement du contrôle : le code reste exigé, et
+       * doit toujours désigner l'établissement du compte. Seule la forme de la
+       * saisie est tolérée, comme elle l'est déjà pour l'email.
+       */
+      const submittedSlug = loginDto.slug?.trim().toUpperCase();
+
+      if (!submittedSlug) {
         throw new UnauthorizedException("Le slug de l'établissement est requis pour se connecter");
       }
-      if (user.slug !== loginDto.slug) {
+      if (user.slug?.trim().toUpperCase() !== submittedSlug) {
         throw new UnauthorizedException('Slug établissement incorrect');
       }
     }

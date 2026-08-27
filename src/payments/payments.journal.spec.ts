@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { AuditService } from '../audit/audit.service';
 import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
 import {
@@ -27,6 +28,7 @@ describe('PaymentsService (annulation, journal, reçus)', () => {
   let service: PaymentsService;
   let paymentRepo: any;
   let manager: any;
+  let audit: any;
   let balance: any;
   let queryBuilder: any;
 
@@ -93,6 +95,8 @@ describe('PaymentsService (annulation, journal, reçus)', () => {
       compute: jest.fn(),
     };
 
+    audit = { record: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentsService,
@@ -104,6 +108,7 @@ describe('PaymentsService (annulation, journal, reçus)', () => {
           provide: getDataSourceToken(),
           useValue: { transaction: jest.fn((cb: any) => cb(manager)) },
         },
+        { provide: AuditService, useValue: audit },
       ],
     }).compile();
 
@@ -137,6 +142,32 @@ describe('PaymentsService (annulation, journal, reçus)', () => {
       await expect(
         service.cancel('pay-1', cancelDto as any, 'school-1'),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('journalise l’annulation avec le reçu, le montant et le motif', async () => {
+      given(payment(), enrollment());
+
+      await service.cancel('pay-1', cancelDto as any, 'school-1');
+
+      // L'annulation est l'opération la plus contestée au comptoir : le motif
+      // doit être lisible au journal sans rouvrir le dossier.
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'PAYMENT_CANCELLED',
+          entityType: 'payments',
+          schoolId: 'school-1',
+        }),
+        undefined,
+      );
+    });
+
+    it('ne journalise rien quand l’annulation est refusée', async () => {
+      given(null, enrollment());
+
+      await expect(
+        service.cancel('pay-x', cancelDto as any, 'school-1'),
+      ).rejects.toThrow();
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('verrouille le reçu et le dossier pendant l’opération', async () => {

@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, Query, ForbiddenException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+  Query,
+} from '@nestjs/common';
 import { AcademicYearsService } from './academic-years.service';
 import { CreateAcademicYearDto } from './dto/create-academic-year.dto';
 import { UpdateAcademicYearDto } from './dto/update-academic-year.dto';
@@ -7,7 +17,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
-import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
+import {
+  AuthUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/academic-years')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -29,8 +43,7 @@ export class AcademicYearsController {
     if (user.roles.includes(Role.SUPER_ADMIN) && !querySchoolId) {
       return await this.academicYearsService.findAll();
     }
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.academicYearsService.findAllBySchool(schoolId);
   }
 
@@ -43,7 +56,7 @@ export class AcademicYearsController {
   ): Promise<AcademicYear> {
     return await this.academicYearsService.create(
       createAcademicYearDto,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
     );
   }
 
@@ -62,7 +75,7 @@ export class AcademicYearsController {
     return await this.academicYearsService.update(
       id,
       updateDto,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
     );
   }
 
@@ -78,17 +91,7 @@ export class AcademicYearsController {
   ): Promise<{ message: string }> {
     return await this.academicYearsService.remove(
       id,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
     );
-  }
-
-  private resolveSchoolId(user: AuthUser, querySchoolId?: string): string {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    }
-    return schoolId;
   }
 }

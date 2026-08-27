@@ -62,7 +62,11 @@ describe('EnrollmentsService (liste, filtres, export)', () => {
       classRoom: {
         findOne: jest.fn().mockResolvedValue({ id: 'class-1', tuitionFee: 100000 }),
       },
-      year: { findOne: jest.fn().mockResolvedValue({ id: 'year-1' }) },
+      year: {
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'year-1', label: '2026-2027', isActive: true }),
+      },
       payment: { count: jest.fn().mockResolvedValue(0) },
     };
     students = {

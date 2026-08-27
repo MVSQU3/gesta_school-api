@@ -36,7 +36,7 @@ function assertJwtSecret(): void {
   if (secret.trim().length < MIN_JWT_SECRET_LENGTH) {
     throw new Error(
       `JWT_SECRET est trop court (${secret.trim().length} caractères, ${MIN_JWT_SECRET_LENGTH} minimum). ` +
-      'Générez-en un avec : openssl rand -base64 48',
+        'Générez-en un avec : openssl rand -base64 48',
     );
   }
 }
@@ -58,12 +58,12 @@ function resolveCorsOrigins(): string[] | boolean {
     .map((o) => o.trim())
     .filter(Boolean);
 
-  if (origins.length > 0) return origins
+  if (origins.length > 0) return origins;
 
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
       'CORS_ORIGINS est obligatoire en production : indiquez l’URL de ' +
-      "l'interface web, par exemple CORS_ORIGINS=https://ecole.exemple.ci",
+        "l'interface web, par exemple CORS_ORIGINS=https://ecole.exemple.ci",
     );
   }
 
@@ -158,8 +158,8 @@ async function bootstrap() {
     maxAge: 86400,
   });
 
-  const port = process.env.PORT ?? 3001;
-  await app.listen(port);
+  const port = process.env.PORT ?? 3001
+  await app.listen(port)
 
   logger.log(
     `API démarrée sur le port ${port} (${process.env.NODE_ENV ?? 'development'})`,

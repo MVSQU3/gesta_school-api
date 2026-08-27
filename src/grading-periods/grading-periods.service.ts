@@ -8,7 +8,8 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+import { Absence } from '../absences/entities/absence.entity';
 import { Evaluation } from '../evaluations/entities/evaluation.entity';
 import { PeriodSystem, School } from '../schools/entities/school.entity';
 import { UpdateGradingPeriodDto } from './dto/update-grading-period.dto';
@@ -29,6 +30,8 @@ export class GradingPeriodsService {
     private readonly schoolRepository: Repository<School>,
     @InjectRepository(Evaluation)
     private readonly evaluationRepository: Repository<Evaluation>,
+    @InjectRepository(Absence)
+    private readonly absenceRepository: Repository<Absence>,
     private readonly auditService: AuditService,
   ) {}
 
@@ -64,6 +67,60 @@ export class GradingPeriodsService {
     );
 
     return await this.periodRepository.save(periods);
+  }
+
+  /**
+   * Recrée les périodes d'une année selon le découpage actuel de l'école.
+   *
+   * Sert après un passage trimestre ↔ semestre : les périodes sont générées à
+   * l'ouverture de l'année, et changer le réglage ensuite ne les régénère pas.
+   *
+   * L'opération est refusée dès qu'une évaluation ou une absence se rattache à
+   * l'une des périodes. Supprimer une période emporte en cascade les notes qui
+   * en dépendent : une année entamée reste dans son découpage jusqu'à son
+   * terme, et c'est la bonne réponse — on ne renumérote pas des trimestres en
+   * semestres au milieu de l'année scolaire.
+   */
+  async regenerateForAcademicYear(
+    academicYearId: string,
+    schoolId: string,
+  ): Promise<GradingPeriod[]> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const existing = await this.periodRepository.find({
+      where: { schoolId, academicYearId },
+    });
+
+    if (existing.length > 0) {
+      const periodIds = existing.map((p) => p.id);
+
+      const evaluationCount = await this.evaluationRepository.count({
+        where: { gradingPeriodId: In(periodIds) },
+      });
+      const absenceCount = await this.absenceRepository.count({
+        where: { gradingPeriodId: In(periodIds) },
+      });
+
+      if (evaluationCount > 0 || absenceCount > 0) {
+        const details = [
+          evaluationCount > 0 ? `${evaluationCount} évaluation(s)` : null,
+          absenceCount > 0 ? `${absenceCount} absence(s)` : null,
+        ]
+          .filter(Boolean)
+          .join(' et ');
+
+        throw new ConflictException(
+          `Cette année scolaire est déjà entamée (${details} saisie(s)) : son découpage ne peut plus être modifié. ` +
+            'Le nouveau découpage s’appliquera à la prochaine année ouverte.',
+        );
+      }
+
+      await this.periodRepository.remove(existing);
+    }
+
+    // `generateForAcademicYear` ne recrée rien tant qu'il reste des périodes ;
+    // la suppression ci-dessus lui rend la main.
+    return await this.generateForAcademicYear(academicYearId, schoolId);
   }
 
   async findAllByYear(

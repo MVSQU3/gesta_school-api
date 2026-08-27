@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -20,24 +19,13 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from './entities/user.entity';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) { }
 
-  /**
-   * Résout l'école cible : celle du JWT, ou celle passée en query pour un admin.
-   */
-  private resolveSchoolId(user: AuthUser, querySchoolId?: string): string {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    }
-    return schoolId;
-  }
 
   @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
   @Post()
@@ -48,7 +36,7 @@ export class UsersController {
   ) {
     return await this.usersService.createStaff(
       createUserDto,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
       user,
     );
   }
@@ -63,7 +51,7 @@ export class UsersController {
     @Query('schoolId') querySchoolId?: string,
   ): Promise<User[]> {
     return await this.usersService.findAllBySchool(
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
     );
   }
 
@@ -81,7 +69,7 @@ export class UsersController {
     return await this.usersService.update(
       id,
       updateUserDto,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
       user.id,
       user,
     );
@@ -101,7 +89,7 @@ export class UsersController {
     return await this.usersService.setActive(
       id,
       dto.isActive,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
       user.id,
       user,
     );
@@ -122,7 +110,7 @@ export class UsersController {
     return await this.usersService.resetPassword(
       id,
       dto.newPassword,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
       user.id,
       user,
     );
@@ -140,7 +128,7 @@ export class UsersController {
   ): Promise<{ message: string }> {
     return await this.usersService.remove(
       id,
-      this.resolveSchoolId(user, querySchoolId),
+      resolveSchoolId(user, querySchoolId),
       user.id,
       user,
     );

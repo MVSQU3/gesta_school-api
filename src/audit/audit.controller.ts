@@ -1,6 +1,5 @@
 import {
   Controller,
-  ForbiddenException,
   Get,
   Param,
   Query,
@@ -20,6 +19,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { AuditService } from './audit.service';
 import { QueryAuditDto } from './dto/query-audit.dto';
 import { AuditLog } from './entities/audit-log.entity';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 /**
  * Consultation du journal d'audit.
@@ -41,12 +41,7 @@ export class AuditController {
   ) {}
 
   private resolveSchool(user: AuthUser, querySchoolId?: string): string {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException('Accès refusé : aucune école spécifiée.');
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return schoolId;
   }
 

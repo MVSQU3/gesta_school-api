@@ -10,6 +10,7 @@ import { Evaluation } from '../evaluations/entities/evaluation.entity';
 import { PeriodSystem, School } from '../schools/entities/school.entity';
 import { GradingPeriod } from './entities/grading-period.entity';
 import { GradingPeriodsService } from './grading-periods.service';
+import { Absence } from '../absences/entities/absence.entity';
 
 describe('GradingPeriodsService (périodes de notation)', () => {
   let service: GradingPeriodsService;
@@ -17,6 +18,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
   let schoolRepo: any;
   let evaluationRepo: any;
   let audit: any;
+  let absenceRepo: any;
 
   const period = (overrides: any = {}) => ({
     id: 'period-1',
@@ -42,6 +44,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
       findOne: jest.fn().mockResolvedValue({ periodSystem: PeriodSystem.TRIMESTER }),
     };
     evaluationRepo = { count: jest.fn().mockResolvedValue(0) };
+    absenceRepo = { count: jest.fn().mockResolvedValue(0) };
     audit = { record: jest.fn(), diff: jest.fn().mockReturnValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -51,6 +54,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
         { provide: getRepositoryToken(School), useValue: schoolRepo },
         { provide: getRepositoryToken(Evaluation), useValue: evaluationRepo },
         { provide: AuditService, useValue: audit },
+        { provide: getRepositoryToken(Absence), useValue: absenceRepo },
       ],
     }).compile();
 
@@ -192,4 +196,55 @@ describe('GradingPeriodsService (périodes de notation)', () => {
       );
     });
   });
+  describe('regenerateForAcademicYear', () => {
+    it('recrée les périodes quand l’année est vierge', async () => {
+      // 1er appel : les périodes à supprimer. 2e appel, depuis
+      // `generateForAcademicYear` : la table est vide, il peut recréer.
+      periodRepo.find
+        .mockResolvedValueOnce([{ id: 'p-1' }])
+        .mockResolvedValue([]);
+      schoolRepo.findOne.mockResolvedValue({
+        periodSystem: PeriodSystem.SEMESTER,
+      });
+
+      await service.regenerateForAcademicYear('year-1', 'school-1');
+
+      expect(periodRepo.remove).toHaveBeenCalled();
+      // Deux semestres après la bascule, et non trois trimestres.
+      expect(periodRepo.save).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ label: '1er Semestre' }),
+          expect.objectContaining({ label: '2e Semestre' }),
+        ]),
+      );
+    });
+
+    it('refuse dès qu’une évaluation est rattachée', async () => {
+      periodRepo.find.mockResolvedValue([{ id: 'p-1' }]);
+      evaluationRepo.count.mockResolvedValue(4);
+
+      // Supprimer une période emporterait en cascade les notes qui en dépendent.
+      await expect(
+        service.regenerateForAcademicYear('year-1', 'school-1'),
+      ).rejects.toThrow(/déjà entamée/);
+      expect(periodRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('refuse dès qu’une absence est rattachée', async () => {
+      periodRepo.find.mockResolvedValue([{ id: 'p-1' }]);
+      absenceRepo.count.mockResolvedValue(2);
+
+      await expect(
+        service.regenerateForAcademicYear('year-1', 'school-1'),
+      ).rejects.toThrow(/déjà entamée/);
+      expect(periodRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('exige un établissement résolu', async () => {
+      await expect(
+        service.regenerateForAcademicYear('year-1', ''),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
 });

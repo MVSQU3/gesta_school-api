@@ -113,6 +113,50 @@ describe('AuthService (connexion)', () => {
       ).rejects.toThrow(/slug de l'établissement est requis/);
     });
 
+    it('accepte le code établissement saisi en minuscules', async () => {
+      usersService.findByEmail.mockResolvedValue(account());
+
+      // Le code est stocké en majuscules mais saisi à la main, souvent sur un
+      // clavier de téléphone : « cmb » désigne bien le même établissement.
+      await expect(
+        service.login({
+          email: 'dir@ecole.ci',
+          password: PASSWORD,
+          slug: 'cmb',
+        } as any),
+      ).resolves.toEqual(
+        expect.objectContaining({ access_token: expect.any(String) }),
+      );
+    });
+
+    it('tolère les espaces autour du code établissement', async () => {
+      usersService.findByEmail.mockResolvedValue(account());
+
+      await expect(
+        service.login({
+          email: 'dir@ecole.ci',
+          password: PASSWORD,
+          slug: '  Cmb  ',
+        } as any),
+      ).resolves.toEqual(
+        expect.objectContaining({ access_token: expect.any(String) }),
+      );
+    });
+
+    it('refuse un code établissement vide ou fait d’espaces', async () => {
+      usersService.findByEmail.mockResolvedValue(account());
+
+      // La tolérance sur la forme ne doit pas transformer une saisie vide en
+      // absence de contrôle.
+      await expect(
+        service.login({
+          email: 'dir@ecole.ci',
+          password: PASSWORD,
+          slug: '   ',
+        } as any),
+      ).rejects.toThrow(/slug de l'établissement est requis/);
+    });
+
     it('refuse un slug qui n’est pas celui du compte', async () => {
       usersService.findByEmail.mockResolvedValue(account());
 

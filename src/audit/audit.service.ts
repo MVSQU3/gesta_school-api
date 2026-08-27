@@ -208,5 +208,10 @@ export class AuditService {
     [AuditAction.SCHOOL_CREATED]: 'Établissement créé',
     [AuditAction.SCHOOL_UPDATED]: 'Établissement modifié',
     [AuditAction.SCHOOL_DELETED]: 'Établissement supprimé',
+    [AuditAction.PAYMENT_RECEIVED]: 'Versement encaissé',
+    [AuditAction.PAYMENT_CANCELLED]: 'Versement annulé',
+    [AuditAction.PARENT_CREATED]: 'Compte parent créé',
+    [AuditAction.PARENT_CHILD_LINKED]: 'Enfant rattaché à un parent',
+    [AuditAction.PARENT_CHILD_UNLINKED]: 'Enfant détaché d’un parent',
   };
 }

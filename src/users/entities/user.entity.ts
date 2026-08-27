@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { School } from '../../schools/entities/school.entity';
+import { Gender } from '../../common/enums/gender.enum';
 import { Role } from '../../common/enums/role.enum';
 
 @Entity('users')
@@ -25,6 +26,30 @@ export class User {
    */
   @Column({ select: false })
   passwordHash: string;
+
+  /**
+   * Identite civile. Nullable, et le restera : les comptes du personnel
+   * existants ont ete crees sans, et l'email suffit a les designer.
+   *
+   * Pour un parent en revanche, c'est le nom qui sert a le retrouver au
+   * guichet — une famille se presente en donnant un nom, jamais une adresse
+   * email.
+   */
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  firstName: string | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  lastName: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  phone: string | null;
+
+  /**
+   * Sexe declare. Renseigne pour les comptes parents, ou il distingue le pere
+   * de la mere ; nul pour le personnel, que rien n'oblige a le declarer.
+   */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  gender: Gender | null;
 
   @Column('text', { array: true, default: [] })
   roles: Role[];

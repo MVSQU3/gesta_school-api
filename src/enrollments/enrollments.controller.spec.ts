@@ -126,7 +126,7 @@ describe('EnrollmentsController (dossiers d’inscription)', () => {
     it('cantonne la secrétaire à son établissement', async () => {
       await controller.findExpired(SECRETARY, 'school-voisine');
 
-      expect(service.findExpired).toHaveBeenCalledWith('school-1');
+      expect(service.findExpired).toHaveBeenCalledWith('school-1', undefined);
       expect(service.findAllExpired).not.toHaveBeenCalled();
     });
 
@@ -138,7 +138,7 @@ describe('EnrollmentsController (dossiers d’inscription)', () => {
     it('restreint le SUPER_ADMIN à l’école qu’il désigne', async () => {
       await controller.findExpired(ADMIN, 'school-2');
 
-      expect(service.findExpired).toHaveBeenCalledWith('school-2');
+      expect(service.findExpired).toHaveBeenCalledWith('school-2', undefined);
       expect(service.findAllExpired).not.toHaveBeenCalled();
     });
   });

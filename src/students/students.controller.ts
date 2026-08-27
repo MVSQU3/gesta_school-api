@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Patch, Post, Body, UseGuards, Query, Param } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, UseGuards, Query, Param } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
@@ -8,6 +8,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/students')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,12 +25,7 @@ export class StudentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return this.studentsService.create(createStudentDto, schoolId);
   }
 
@@ -48,12 +44,7 @@ export class StudentsController {
     @Query('academicYearId') academicYearId?: string,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException('Accès refusé : aucune école spécifiée.');
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return this.historyService.getHistory(studentId, schoolId, academicYearId);
   }
 
@@ -69,12 +60,7 @@ export class StudentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException('Accès refusé : aucune école spécifiée.');
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return this.studentsService.update(studentId, dto, schoolId, user);
   }
 
@@ -90,12 +76,7 @@ export class StudentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId) {
-      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return this.studentsService.search(schoolId, q ?? '');
   }
 

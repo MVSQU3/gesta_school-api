@@ -15,6 +15,9 @@ import {
   Enrollment,
   EnrollmentStatus,
 } from '../enrollments/entities/enrollment.entity';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
 import { School } from '../schools/entities/school.entity';
@@ -51,9 +54,15 @@ export class PaymentsService {
     private readonly enrollmentRepository: Repository<Enrollment>,
     private readonly referencesService: ReferencesService,
     private readonly balanceService: BalanceService,
+    private readonly auditService: AuditService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
+
+  /** Montant en FCFA, lisible dans une phrase de journal. */
+  private fcfa(value: unknown): string {
+    return `${Number(value ?? 0).toLocaleString('fr-FR')} FCFA`;
+  }
 
   /**
    * Génère un numéro de reçu de caisse unique au format REC-CODE-YY-XXXX (ex: REC-CMB-26-0001).
@@ -89,11 +98,12 @@ export class PaymentsService {
     schoolId: string,
     slug: string,
     receivedByUserId: string | null = null,
+    actor?: AuthUser,
   ): Promise<PaymentResult> {
     if (!schoolId) throw new ForbiddenException('schoolId est requis');
 
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const paid = await this.dataSource.transaction(async (manager) => {
         // 1. Chargement + verrouillage de la ligne d'inscription.
         //    Pas de relations ici : PostgreSQL refuse FOR UPDATE sur un LEFT JOIN.
         const enrollment = await manager.findOne(Enrollment, {
@@ -205,6 +215,34 @@ export class PaymentsService {
 
         return result;
       });
+
+      /**
+       * Journalisation après validation de la transaction, jamais dedans.
+       *
+       * Émettre à l'intérieur consignerait un encaissement qu'une annulation
+       * de transaction ferait disparaître : le journal annoncerait de l'argent
+       * qui n'a jamais été enregistré — exactement le contraire de ce qu'on
+       * lui demande.
+       *
+       * `void` : l'écriture du journal ne fait pas attendre le guichet, et
+       * `AuditService.record` avale ses propres erreurs. Un journal en panne
+       * ne doit pas empêcher d'encaisser.
+       */
+      void this.auditService.record(
+        {
+          action: AuditAction.PAYMENT_RECEIVED,
+          entityType: 'payments',
+          entityId: paid.id,
+          schoolId,
+          summary:
+            `Versement de ${this.fcfa(paid.amount)} encaissé sur le dossier ` +
+            `${createPaymentDto.reference} — reçu ${paid.receiptNumber}` +
+            `${paid.balanceAfter?.isFullyPaid ? ', scolarité soldée' : `, reste ${this.fcfa(paid.balanceAfter?.balance)}`}`,
+        },
+        actor,
+      );
+
+      return paid;
     } catch (error) {
       if (error instanceof TokenExpiredSignal) {
         // La transaction est annulée : on bascule le dossier en EXPIRED
@@ -246,10 +284,11 @@ export class PaymentsService {
     dto: CancelPaymentDto,
     schoolId: string,
     cancelledByUserId: string | null = null,
+    actor?: AuthUser,
   ): Promise<Payment> {
     if (!schoolId) throw new ForbiddenException('schoolId est requis');
 
-    return await this.dataSource.transaction(async (manager) => {
+    const cancelled = await this.dataSource.transaction(async (manager) => {
       const payment = await manager.findOne(Payment, {
         where: { id: paymentId, schoolId },
         lock: { mode: 'pessimistic_write' },
@@ -306,6 +345,30 @@ export class PaymentsService {
         },
       })) as Payment;
     });
+
+    /**
+     * Même règle que pour l'encaissement : après validation.
+     *
+     * L'annulation est l'opération la plus contestée au comptoir — une famille
+     * détient un reçu papier que le logiciel déclare sans valeur. Le motif est
+     * repris tel quel dans le journal, pour qu'on puisse répondre sans
+     * rouvrir le dossier.
+     */
+    void this.auditService.record(
+      {
+        action: AuditAction.PAYMENT_CANCELLED,
+        entityType: 'payments',
+        entityId: cancelled.id,
+        schoolId,
+        summary:
+          `Reçu ${cancelled.receiptNumber} (${this.fcfa(cancelled.amount)}) annulé` +
+          `${cancelled.cancellationType ? ` — ${cancelled.cancellationType === 'REFUND' ? 'remboursement' : 'erreur de saisie'}` : ''}` +
+          `${cancelled.cancellationReason ? ` : ${cancelled.cancellationReason}` : ''}`,
+      },
+      actor,
+    );
+
+    return cancelled;
   }
 
   /**

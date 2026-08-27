@@ -9,7 +9,6 @@ import {
   Post,
   Query,
   UseGuards,
-  ForbiddenException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { CsvService } from '../common/export/csv.service';
@@ -26,6 +25,7 @@ import { UpdateEnrollmentDto } from './dto/update-enrollment.dto';
 import { Enrollment } from './entities/enrollment.entity';
 import { EnrollmentsService, EnrollmentWithBalance } from './enrollments.service';
 import { AuthUser, CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/enrollments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -45,8 +45,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Enrollment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     createEnrollmentDto.schoolId = schoolId;
     return await this.enrollmentsService.create(createEnrollmentDto, user.id);
   }
@@ -65,8 +64,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.bulkEnroll(dto, schoolId, user.id, user);
   }
 
@@ -90,8 +88,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<void> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
 
     const dossiers = await this.enrollmentsService.findAllForExport(schoolId, query);
 
@@ -133,11 +130,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<PaginatedResult<Enrollment>> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN)
-      ? querySchoolId
-      : user.schoolId;
-    if (!schoolId)
-      throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.findAll(schoolId, query);
   }
 
@@ -149,13 +142,13 @@ export class EnrollmentsController {
   async findExpired(
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
+    @Query('academicYearId') academicYearId?: string,
   ): Promise<Enrollment[]> {
     if (user.roles.includes(Role.SUPER_ADMIN) && !querySchoolId) {
       return await this.enrollmentsService.findAllExpired();
     }
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école valide assignée.");
-    return await this.enrollmentsService.findExpired(schoolId);
+    const schoolId = resolveSchoolId(user, querySchoolId);
+    return await this.enrollmentsService.findExpired(schoolId, academicYearId);
   }
 
   /**
@@ -169,8 +162,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Enrollment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.renew(id, schoolId);
   }
 
@@ -184,8 +176,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Enrollment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.findByReference(schoolId, reference);
   }
 
@@ -201,8 +192,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Enrollment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.validate(id, schoolId);
   }
 
@@ -220,8 +210,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<EnrollmentWithBalance> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.update(id, dto, schoolId, user);
   }
 
@@ -237,8 +226,7 @@ export class EnrollmentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<{ message: string }> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.enrollmentsService.remove(id, schoolId, user);
   }
 }

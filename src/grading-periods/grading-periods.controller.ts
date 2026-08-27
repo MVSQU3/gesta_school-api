@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -34,6 +35,23 @@ export class GradingPeriodsController {
     return await this.service.findAllByYear(
       resolveSchoolId(user, querySchoolId),
       academicYearId,
+    );
+  }
+
+  /**
+   * Régénère les périodes d'une année selon le découpage actuel de l'école.
+   * Refusé dès qu'une note ou une absence y est rattachée.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Post('regenerate')
+  async regenerate(
+    @Query('academicYearId') academicYearId: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<GradingPeriod[]> {
+    return await this.service.regenerateForAcademicYear(
+      academicYearId,
+      resolveSchoolId(user, querySchoolId),
     );
   }
 

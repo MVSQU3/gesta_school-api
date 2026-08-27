@@ -6,10 +6,13 @@ import {
   Patch,
   Param,
   Delete,
+  Query,
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
 import { UpdateSchoolDto } from './dto/update-school.dto';
+import { UpdatePeriodSystemDto } from './dto/update-period-system.dto';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 import { School } from './entities/school.entity';
 import { SchoolsService } from './schools.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -46,6 +49,31 @@ export class SchoolsController {
       );
     }
     return await this.schoolsService.findOne(id);
+  }
+
+  /**
+   * Découpage de l'année scolaire de SON établissement.
+   *
+   * Ouvert au directeur, contrairement au reste de la modification d'école :
+   * c'est une décision pédagogique qui lui appartient, et l'obliger à passer
+   * par l'administrateur de la plateforme n'apporterait aucune sécurité.
+   *
+   * `resolveSchoolId` le ramène de force à son école ; seul le SUPER_ADMIN
+   * peut en désigner une autre. Déclarée avant `@Patch(':id')`, sinon « me »
+   * serait capté comme un identifiant.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Patch('me/period-system')
+  async updatePeriodSystem(
+    @Body() dto: UpdatePeriodSystemDto,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ): Promise<School> {
+    return await this.schoolsService.updatePeriodSystem(
+      resolveSchoolId(user, querySchoolId),
+      dto.periodSystem,
+      user,
+    );
   }
 
   @Roles(Role.SUPER_ADMIN)

@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { School } from './entities/school.entity';
 import { SchoolsService } from './schools.service';
+import { AuditService } from '../audit/audit.service';
 
 describe('SchoolsService (établissements)', () => {
   let service: SchoolsService;
@@ -27,6 +28,7 @@ describe('SchoolsService (établissements)', () => {
       providers: [
         SchoolsService,
         { provide: getRepositoryToken(School), useValue: schoolRepo },
+        { provide: AuditService, useValue: { record: jest.fn() } },
       ],
     }).compile();
 

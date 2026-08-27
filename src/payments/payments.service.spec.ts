@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
+import { AuditService } from '../audit/audit.service';
 import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
 import { Enrollment, EnrollmentStatus } from '../enrollments/entities/enrollment.entity';
@@ -10,6 +11,7 @@ import { PaymentsService } from './payments.service';
 
 describe('PaymentsService (Tests Unitaires Encaissement Caisse)', () => {
   let service: PaymentsService;
+  let audit: any;
   let mockPaymentRepository: any;
   let mockEnrollmentRepository: any;
   let mockReferencesService: any;
@@ -48,6 +50,8 @@ describe('PaymentsService (Tests Unitaires Encaissement Caisse)', () => {
       }),
     };
 
+    audit = { record: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentsService,
@@ -56,6 +60,7 @@ describe('PaymentsService (Tests Unitaires Encaissement Caisse)', () => {
         { provide: ReferencesService, useValue: mockReferencesService },
         { provide: BalanceService, useValue: mockBalanceService },
         { provide: getDataSourceToken(), useValue: mockDataSource },
+        { provide: AuditService, useValue: audit },
       ],
     }).compile();
 
@@ -188,6 +193,81 @@ describe('PaymentsService (Tests Unitaires Encaissement Caisse)', () => {
       expect(result.balanceAfter.balance).toBe(50000);
       expect(enrollment.status).toBe(EnrollmentStatus.PARTIALLY_PAID);
       expect(mockEnrollmentRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Journal d’audit de la caisse', () => {
+    it('journalise l’encaissement avec le montant, la référence et le reçu', async () => {
+      givenEnrollment(
+        {
+          id: 'enrollment-uuid-1',
+          status: EnrollmentStatus.PENDING_PAYMENT,
+          expiresAt: new Date(Date.now() + 48 * 3600 * 1000),
+          totalDue: 150000,
+        },
+        0,
+      );
+
+      await pay(50000);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'PAYMENT_RECEIVED',
+          entityType: 'payments',
+          schoolId: 'school-uuid-1',
+          summary: expect.stringContaining('INS-CMB-26-0001'),
+        }),
+        undefined,
+      );
+    });
+
+    it('mentionne le solde restant dans le résumé', async () => {
+      givenEnrollment(
+        {
+          id: 'enrollment-uuid-1',
+          status: EnrollmentStatus.PENDING_PAYMENT,
+          expiresAt: new Date(Date.now() + 48 * 3600 * 1000),
+          totalDue: 150000,
+        },
+        0,
+      );
+
+      await pay(50000);
+
+      const [entry] = audit.record.mock.calls[0];
+      expect(entry.summary).toMatch(/reste/i);
+    });
+
+    it('ne journalise rien quand l’encaissement est refusé', async () => {
+      // Le jeton a expiré : la transaction est annulée. Journaliser malgré
+      // tout annoncerait de l'argent qui n'a jamais été enregistré.
+      givenEnrollment(
+        {
+          id: 'enrollment-uuid-1',
+          status: EnrollmentStatus.PENDING_PAYMENT,
+          expiresAt: new Date(Date.now() - 3600 * 1000),
+          totalDue: 150000,
+        },
+        0,
+      );
+
+      await expect(pay(50000)).rejects.toThrow();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('ne journalise rien quand le versement dépasse le solde dû', async () => {
+      givenEnrollment(
+        {
+          id: 'enrollment-uuid-1',
+          status: EnrollmentStatus.PARTIALLY_PAID,
+          expiresAt: new Date(Date.now() + 48 * 3600 * 1000),
+          totalDue: 150000,
+        },
+        100000,
+      );
+
+      await expect(pay(90000)).rejects.toThrow();
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 

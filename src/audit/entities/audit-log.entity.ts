@@ -48,6 +48,15 @@ export enum AuditAction {
   SCHOOL_CREATED = 'SCHOOL_CREATED',
   SCHOOL_UPDATED = 'SCHOOL_UPDATED',
   SCHOOL_DELETED = 'SCHOOL_DELETED',
+
+  // Caisse
+  PAYMENT_RECEIVED = 'PAYMENT_RECEIVED',
+  PAYMENT_CANCELLED = 'PAYMENT_CANCELLED',
+
+  // Comptes parents et liens de tutelle
+  PARENT_CREATED = 'PARENT_CREATED',
+  PARENT_CHILD_LINKED = 'PARENT_CHILD_LINKED',
+  PARENT_CHILD_UNLINKED = 'PARENT_CHILD_UNLINKED',
 }
 
 /** Valeur d'un champ avant et après modification. */

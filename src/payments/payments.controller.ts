@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Res, UseGuards, Query, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Res, UseGuards, Query } from '@nestjs/common';
 import type { Response } from 'express';
 import { CsvService } from '../common/export/csv.service';
 import { PdfService } from '../common/pdf/pdf.service';
@@ -13,6 +13,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/payments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -33,13 +34,16 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Payment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.paymentsService.processPayment(
       createPaymentDto,
       schoolId,
       user.slug || 'SCH',
       user.id,
+      // L'acteur complet, et non son seul identifiant : le journal d'audit
+      // affiche l'email du caissier, qui reste lisible même si le compte est
+      // supprimé plus tard.
+      user,
     );
   }
 
@@ -54,8 +58,7 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.paymentsService.findJournal(schoolId, query);
   }
 
@@ -76,8 +79,7 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<void> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
 
     const payments = await this.paymentsService.findJournalForExport(schoolId, query);
 
@@ -120,8 +122,7 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ) {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException('Accès refusé');
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.paymentsService.findByReceiptNumber(receiptNumber, schoolId);
   }
 
@@ -136,8 +137,7 @@ export class PaymentsController {
     @Res() res: Response,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<void> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException('Accès refusé');
+    const schoolId = resolveSchoolId(user, querySchoolId);
 
     const payment = await this.paymentsService.findByReceiptNumber(
       receiptNumber,
@@ -167,9 +167,8 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Payment> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
-    return await this.paymentsService.cancel(id, dto, schoolId, user.id);
+    const schoolId = resolveSchoolId(user, querySchoolId);
+    return await this.paymentsService.cancel(id, dto, schoolId, user.id, user);
   }
 
   /**
@@ -182,8 +181,7 @@ export class PaymentsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Payment[]> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException('Accès refusé');
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.paymentsService.findByEnrollment(enrollmentId, schoolId);
   }
 
@@ -200,8 +198,7 @@ export class PaymentsController {
     if (user.roles.includes(Role.SUPER_ADMIN) && !querySchoolId) {
       return await this.paymentsService.findOneById(id);
     }
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.paymentsService.findOne(id, schoolId);
   }
 }

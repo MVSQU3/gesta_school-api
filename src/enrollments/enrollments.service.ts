@@ -137,6 +137,24 @@ export class EnrollmentsService {
       );
     }
 
+    /**
+     * Une année close n'accepte plus d'inscription.
+     *
+     * L'identifiant vient du client : un onglet resté ouvert pendant la
+     * rentrée porte encore celui de l'année précédente, et le dossier créé
+     * partait alors dans une année terminée — invisible du tableau de bord,
+     * absent des listes de classe, mais bien facturé à la famille.
+     *
+     * Conséquence assumée : pour inscrire sur l'année suivante, il faut
+     * l'avoir activée. C'est déjà le déroulé normal d'une rentrée, la
+     * création d'une année l'activant par défaut.
+     */
+    if (!academicYear.isActive) {
+      throw new ConflictException(
+        `L'année scolaire ${academicYear.label} est clôturée : aucune nouvelle inscription ne peut y être enregistrée. Activez l'année en cours depuis l'espace Direction.`,
+      );
+    }
+
     // Cas 1 : réinscription d'un élève déjà connu. On vérifie qu'il appartient
     // bien à l'établissement avant de lui rattacher un nouveau dossier.
     if (studentId) {
@@ -274,6 +292,14 @@ export class EnrollmentsService {
     if (!academicYear) {
       throw new NotFoundException(
         "L'année scolaire sélectionnée n'existe pas dans cet établissement.",
+      );
+    }
+
+    // Même règle que pour une inscription unitaire : une réinscription en
+    // masse dans une année close produirait des dizaines de dossiers morts.
+    if (!academicYear.isActive) {
+      throw new ConflictException(
+        `L'année scolaire ${academicYear.label} est clôturée : la réinscription doit viser l'année en cours.`,
       );
     }
 
@@ -572,7 +598,10 @@ export class EnrollmentsService {
   /**
    * Récupère la liste de tous les dossiers expirés d'une école (Onglet "Les Oubliés")
    */
-  async findExpired(schoolId: string): Promise<Enrollment[]> {
+  async findExpired(
+    schoolId: string,
+    academicYearId?: string,
+  ): Promise<Enrollment[]> {
     if (!schoolId) throw new (await import('@nestjs/common')).ForbiddenException('schoolId est requis');
     const now = new Date();
 
@@ -587,7 +616,30 @@ export class EnrollmentsService {
       status: EnrollmentStatus.EXPIRED,
     });
 
+    /**
+     * L'écran de rattrapage est borné à une année scolaire.
+     *
+     * Sans ce filtre il cumulait les dossiers expirés de toutes les années :
+     * après deux ou trois rentrées, le secrétariat devait faire le tri entre
+     * des dossiers rattrapables et des dossiers morts depuis longtemps, que
+     * plus personne n'allait renouveler.
+     *
+     * À défaut de précision, l'année en cours. Si l'établissement n'en a
+     * aucune d'active — clôture sans réactivation — on retombe sur la liste
+     * complète plutôt que sur un écran vide inexplicable.
+     */
+    const scopedYearId =
+      academicYearId ??
+      (
+        await this.academicYearRepository.findOne({
+          where: { schoolId, isActive: true },
+        })
+      )?.id;
+
     const whereQuery: any = { status: EnrollmentStatus.EXPIRED, schoolId };
+    if (scopedYearId) {
+      whereQuery.academicYearId = scopedYearId;
+    }
 
     return await this.enrollmentRepository.find({
       where: whereQuery,

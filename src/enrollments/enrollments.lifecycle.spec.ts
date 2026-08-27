@@ -61,7 +61,9 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
       school: { findOne: jest.fn().mockResolvedValue({ id: 'school-1', slug: 'CMB' }) },
       classRoom: { findOne: jest.fn().mockResolvedValue(classRoom()) },
       year: {
-        findOne: jest.fn().mockResolvedValue({ id: 'year-1', label: '2026-2027' }),
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'year-1', label: '2026-2027', isActive: true }),
       },
       payment: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -99,6 +101,25 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
     }).compile();
 
     service = module.get<EnrollmentsService>(EnrollmentsService);
+  });
+
+  describe('année clôturée', () => {
+    it('refuse une réinscription en masse visant une année close', async () => {
+      repos.year.findOne.mockResolvedValue({
+        id: 'year-0',
+        label: '2024-2025',
+        isActive: false,
+      });
+
+      // Un onglet resté ouvert pendant la rentrée porte encore l'identifiant
+      // de l'année précédente : le lot partirait dans une année terminée.
+      await expect(
+        service.bulkEnroll(
+          { classRoomId: 'class-1', academicYearId: 'year-0', studentIds: ['st-1'] } as any,
+          'school-1',
+        ),
+      ).rejects.toThrow(/clôturée/);
+    });
   });
 
   describe('bulkEnroll', () => {
@@ -413,6 +434,45 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
 
     it('exige un établissement résolu', async () => {
       await expect(service.findExpired('')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('borne la liste à l’année en cours par défaut', async () => {
+      repos.year.findOne.mockResolvedValue({
+        id: 'year-1',
+        label: '2026-2027',
+        isActive: true,
+      });
+
+      await service.findExpired('school-1');
+
+      // Sans ce filtre, « Les Oubliés » cumulait les dossiers morts de toutes
+      // les rentrées passées.
+      expect(repos.enrollment.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ academicYearId: 'year-1' }),
+        }),
+      );
+    });
+
+    it('honore l’année explicitement demandée', async () => {
+      await service.findExpired('school-1', 'year-0');
+
+      expect(repos.enrollment.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ academicYearId: 'year-0' }),
+        }),
+      );
+    });
+
+    it('retombe sur la liste complète si aucune année n’est active', async () => {
+      // Clôture sans réactivation : mieux vaut tout montrer qu'un écran vide
+      // que personne ne saurait expliquer.
+      repos.year.findOne.mockResolvedValue(null);
+
+      await service.findExpired('school-1');
+
+      const [options] = repos.enrollment.find.mock.calls.at(-1);
+      expect(options.where.academicYearId).toBeUndefined();
     });
 
     it('balaye toutes les écoles pour le SUPER_ADMIN', async () => {

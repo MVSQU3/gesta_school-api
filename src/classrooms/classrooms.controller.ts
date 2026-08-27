@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, Query, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, Query } from '@nestjs/common';
 import { ClassRoomsService } from './classrooms.service';
 import { CreateClassRoomDto } from './dto/create-classroom.dto';
 import { UpdateClassRoomDto } from './dto/update-classroom.dto';
@@ -8,6 +8,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
+import { resolveSchoolId } from '../common/utils/resolve-school';
 
 @Controller('api/v1/classrooms')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -37,11 +38,7 @@ export class ClassRoomsController {
       return await this.classRoomsService.findAll();
     }
 
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    
-    if (!schoolId) {
-      throw new ForbiddenException("Accès refusé : aucune école valide assignée.");
-    }
+    const schoolId = resolveSchoolId(user, querySchoolId);
 
     return await this.classRoomsService.findAllBySchool(schoolId);
   }
@@ -63,8 +60,7 @@ export class ClassRoomsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<ClassRoom> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.classRoomsService.update(id, updateClassRoomDto, schoolId, user);
   }
 
@@ -78,8 +74,7 @@ export class ClassRoomsController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<{ message: string }> {
-    const schoolId = user.roles.includes(Role.SUPER_ADMIN) ? querySchoolId : user.schoolId;
-    if (!schoolId) throw new ForbiddenException("Accès refusé : aucune école spécifiée.");
+    const schoolId = resolveSchoolId(user, querySchoolId);
     return await this.classRoomsService.remove(id, schoolId, user);
   }
 }
