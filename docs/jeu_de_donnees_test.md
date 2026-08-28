@@ -136,6 +136,9 @@ deux séances que se vérifient les règles ci-dessous.
 | Kouamé saisit **le mardi** l'appel du **lundi** | Accepté — l'heure de saisie est libre, la séance visée reste celle du lundi |
 | La récréation | N'apparaît jamais dans la liste des séances |
 | Le directeur ouvre l'appel | Il voit **toutes** les séances du jour, pas seulement les siennes |
+| Kouamé fait l'appel, **tous présents** | Accepté — l'appel est tracé même sans absent |
+| La même séance rouverte ensuite | Marquée « Appel déjà fait », coche ✓ dans la liste |
+| Direction → Assiduité, « Appels non faits » | Liste les séances passées jamais appelées, avec l'enseignant concerné |
 
 ---
 

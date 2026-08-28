@@ -93,6 +93,27 @@ export class AbsencesController {
   }
 
   /**
+   * Séances qui auraient dû être appelées et ne l'ont pas été.
+   *
+   * Réservé à la direction : c'est un contrôle sur le travail des
+   * enseignants, pas une information de classe.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Get('missing')
+  async missing(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    return await this.service.getMissingRollCalls(
+      resolveSchoolId(user, querySchoolId),
+      from,
+      to,
+    );
+  }
+
+  /**
    * Élèves dépassant un seuil d'absences non justifiées.
    *
    * Le seuil est fourni par l'appelant : ce qui alerte en terminale n'alerte

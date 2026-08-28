@@ -12,6 +12,7 @@ import { Enrollment } from '../enrollments/entities/enrollment.entity';
 import { GradingPeriod } from '../grading-periods/entities/grading-period.entity';
 import { ScheduleEntry } from '../schedule/entities/schedule-entry.entity';
 import { Absence, AbsenceStatus } from './entities/absence.entity';
+import { RollCall } from './entities/roll-call.entity';
 import { AbsencesService } from './absences.service';
 import { AuditService } from '../audit/audit.service';
 
@@ -118,9 +119,20 @@ describe('AbsencesService (appel par séance)', () => {
         find: jest.fn().mockResolvedValue([session()]),
         findOne: jest.fn().mockResolvedValue(session()),
       },
+      rollCall: {
+        find: jest.fn().mockResolvedValue([]),
+      },
     };
 
-    manager = { remove: jest.fn(), save: jest.fn() };
+    manager = {
+      remove: jest.fn(),
+      save: jest.fn(),
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((_e: unknown, d: any) => ({ ...d })),
+      merge: jest.fn((_e: unknown, current: any, d: any) =>
+        Object.assign(current, d),
+      ),
+    };
     audit = { record: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -133,6 +145,7 @@ describe('AbsencesService (appel par séance)', () => {
           provide: getRepositoryToken(ScheduleEntry),
           useValue: repos.schedule,
         },
+        { provide: getRepositoryToken(RollCall), useValue: repos.rollCall },
         {
           provide: getDataSourceToken(),
           useValue: { transaction: jest.fn((cb: any) => cb(manager)) },
@@ -278,9 +291,30 @@ describe('AbsencesService (appel par séance)', () => {
       expect(entry.summary).toContain('6ème A');
     });
 
-    it('ne journalise rien quand il n’y a rien à écrire', async () => {
+    it('trace l’appel même quand tout le monde est présent', async () => {
       await service.record(dto({ entries: [] }), 'school-1', TEACHER);
-      expect(audit.record).not.toHaveBeenCalled();
+
+      // Sans cette marque, une séance sans absent serait indiscernable d'une
+      // séance jamais appelée.
+      const saved = manager.save.mock.calls.map((c: any[]) => c[0]);
+      expect(
+        saved.some((v: any) => v?.scheduleEntryId === 'entry-1' && v?.takenByUserId),
+      ).toBe(true);
+
+      const [entry] = audit.record.mock.calls[0];
+      expect(entry.summary).toContain('aucun absent');
+    });
+
+    it('met à jour la marque plutôt que d’en créer une seconde', async () => {
+      manager.findOne.mockResolvedValue({ id: 'rc-1', takenByUserId: 'old' });
+
+      await service.record(dto(), 'school-1', TEACHER);
+
+      expect(manager.merge).toHaveBeenCalled();
+      expect(manager.create).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ scheduleEntryId: 'entry-1' }),
+      );
     });
   });
 
@@ -326,6 +360,72 @@ describe('AbsencesService (appel par séance)', () => {
       );
 
       expect(sessions).toHaveLength(1);
+    });
+  });
+
+  describe('appels manquants', () => {
+    /** Intervalle passé de deux semaines, borné au dernier lundi. */
+    const range = () => {
+      const end = new Date(`${lastMonday()}T00:00:00`);
+      const start = new Date(end);
+      start.setDate(start.getDate() - 7);
+      const iso = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return { from: iso(start), to: iso(end) };
+    };
+
+    it('signale la séance du lundi non appelée', async () => {
+      const { from, to } = range();
+
+      const missing = await service.getMissingRollCalls('school-1', from, to);
+
+      // Deux lundis dans l'intervalle, aucun appel enregistré.
+      expect(missing.length).toBeGreaterThan(0);
+      expect(missing[0]).toMatchObject({
+        scheduleEntryId: 'entry-1',
+        subjectName: 'Français',
+        classRoomName: '6ème A',
+      });
+    });
+
+    it('ne signale plus une séance déjà appelée', async () => {
+      const { from, to } = range();
+      repos.rollCall.find.mockResolvedValue([
+        { scheduleEntryId: 'entry-1', date: to },
+      ]);
+
+      const missing = await service.getMissingRollCalls('school-1', from, to);
+
+      expect(missing.some((m) => m.date === to)).toBe(false);
+    });
+
+    it('écarte les pauses, qui ne s’appellent pas', async () => {
+      const { from, to } = range();
+      repos.schedule.find.mockResolvedValue([
+        session({ timeSlot: { isBreak: true, label: 'Récréation' } }),
+      ]);
+
+      await expect(
+        service.getMissingRollCalls('school-1', from, to),
+      ).resolves.toEqual([]);
+    });
+
+    it('refuse un intervalle inversé', async () => {
+      await expect(
+        service.getMissingRollCalls('school-1', '2026-09-01', '2026-08-01'),
+      ).rejects.toThrow(/précéder/);
+    });
+
+    it('refuse un intervalle trop large, qui déroulerait un an de calendrier', async () => {
+      await expect(
+        service.getMissingRollCalls('school-1', '2026-01-01', '2026-12-31'),
+      ).rejects.toThrow(/dépasse/);
+    });
+
+    it('exige un établissement résolu', async () => {
+      await expect(
+        service.getMissingRollCalls('', '2026-08-01', '2026-08-10'),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 

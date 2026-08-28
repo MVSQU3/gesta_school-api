@@ -20,6 +20,7 @@ import {
 } from '../schedule/entities/schedule-entry.entity';
 import { RecordAbsencesDto, UpdateAbsenceDto } from './dto/absence.dto';
 import { Absence, AbsenceStatus } from './entities/absence.entity';
+import { RollCall } from './entities/roll-call.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -43,6 +44,8 @@ export class AbsencesService {
     private readonly periodRepository: Repository<GradingPeriod>,
     @InjectRepository(ScheduleEntry)
     private readonly scheduleRepository: Repository<ScheduleEntry>,
+    @InjectRepository(RollCall)
+    private readonly rollCallRepository: Repository<RollCall>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly auditService: AuditService,
@@ -220,10 +223,25 @@ export class AbsencesService {
       },
     });
 
-    return entries
-      .filter((e) => !e.timeSlot?.isBreak)
+    const callable = entries.filter((e) => !e.timeSlot?.isBreak);
+
+    // Ce qui a déjà été appelé ce jour-là : l'enseignant voit d'un coup d'œil
+    // ce qui lui reste à faire, plutôt que de rouvrir chaque séance.
+    const taken = callable.length
+      ? await this.rollCallRepository.find({
+          where: {
+            schoolId,
+            date: new Date(date),
+            scheduleEntryId: In(callable.map((e) => e.id)),
+          },
+        })
+      : [];
+    const takenIds = new Set(taken.map((r) => r.scheduleEntryId));
+
+    return callable
       .map((e) => ({
         scheduleEntryId: e.id,
+        taken: takenIds.has(e.id),
         classRoomId: e.classRoomId,
         classRoomName: e.classRoom?.name ?? '',
         subjectId: e.teachingAssignment?.subjectId ?? '',
@@ -411,12 +429,34 @@ export class AbsencesService {
      * des élèves repassés présents mais toujours marqués absents, ou
      * l'inverse. Un appel vaut pour la séance entière ou pour rien.
      */
-    if (toRemove.length > 0 || toSave.length > 0) {
-      await this.dataSource.transaction(async (manager) => {
-        if (toRemove.length > 0) await manager.remove(toRemove);
-        if (toSave.length > 0) await manager.save(toSave);
+    /**
+     * L'appel est toujours tracé, même sans le moindre écart.
+     *
+     * C'est tout l'objet de `roll_calls` : une séance où tous les élèves sont
+     * présents n'écrit aucune absence, et sans cette marque elle serait
+     * indiscernable d'une séance jamais appelée.
+     */
+    await this.dataSource.transaction(async (manager) => {
+      if (toRemove.length > 0) await manager.remove(toRemove);
+      if (toSave.length > 0) await manager.save(toSave);
+
+      const existingCall = await manager.findOne(RollCall, {
+        where: { scheduleEntryId: session.id, date },
       });
 
+      await manager.save(
+        existingCall
+          ? manager.merge(RollCall, existingCall, { takenByUserId: user.id })
+          : manager.create(RollCall, {
+              schoolId,
+              scheduleEntryId: session.id,
+              date,
+              takenByUserId: user.id,
+            }),
+      );
+    });
+
+    {
       /**
        * Une absence non justifiée a des conséquences — au bulletin, et parfois
        * sur la bourse de l'élève. La famille qui la conteste doit pouvoir
@@ -431,8 +471,10 @@ export class AbsencesService {
           summary:
             `Appel du ${dto.date}, ${session.teachingAssignment?.subject?.name ?? 'cours'} ` +
             `en ${session.classRoom?.name ?? ''} (${session.timeSlot?.label ?? ''}) : ` +
-            `${toSave.length} écart(s) enregistré(s)` +
-            (toRemove.length > 0 ? `, ${toRemove.length} levé(s)` : ''),
+            (toSave.length === 0 && toRemove.length === 0
+            ? 'aucun absent'
+            : `${toSave.length} écart(s) enregistré(s)` +
+              (toRemove.length > 0 ? `, ${toRemove.length} levé(s)` : '')),
         },
         user,
       );
@@ -615,6 +657,112 @@ export class AbsencesService {
       justified: Number(r.justified),
       late: Number(r.late),
     }));
+  }
+
+  /**
+   * Séances qui auraient dû être appelées et ne l'ont pas été.
+   *
+   * C'est la question que se pose une direction sur l'assiduité — non pas
+   * « qui manque » mais « qui ne relève pas ». Elle est indécidable sans la
+   * table `roll_calls` : une séance sans absence est, en base, identique à
+   * une séance jamais appelée.
+   *
+   * Le croisement se fait en mémoire plutôt qu'en SQL : il faut dérouler le
+   * calendrier, et une grille d'établissement sur deux semaines représente
+   * quelques centaines de combinaisons — pas de quoi justifier une requête
+   * récursive.
+   *
+   * Les dates du jour et à venir sont écartées : une séance de cet après-midi
+   * n'est pas un manquement.
+   */
+  async getMissingRollCalls(
+    schoolId: string,
+    from: string,
+    to: string,
+  ) {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const today = this.today();
+    const start = new Date(`${from}T00:00:00`);
+    const end = new Date(`${to}T00:00:00`);
+
+    if (start > end) {
+      throw new BadRequestException(
+        'La date de début doit précéder la date de fin.',
+      );
+    }
+
+    const MAX_DAYS = 92;
+    const spanDays =
+      Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+    if (spanDays > MAX_DAYS) {
+      throw new BadRequestException(
+        `La période demandée dépasse ${MAX_DAYS} jours : resserrez l'intervalle.`,
+      );
+    }
+
+    const entries = await this.scheduleRepository.find({
+      where: { schoolId },
+      relations: {
+        timeSlot: true,
+        classRoom: true,
+        teacher: true,
+        teachingAssignment: { subject: true },
+      },
+    });
+    const callable = entries.filter((e) => !e.timeSlot?.isBreak);
+    if (callable.length === 0) return [];
+
+    const done = await this.rollCallRepository.find({
+      where: { schoolId },
+    });
+    const doneKeys = new Set(
+      done.map((r) => `${r.scheduleEntryId}|${this.isoDate(r.date)}`),
+    );
+
+    const missing: Array<{
+      scheduleEntryId: string;
+      date: string;
+      classRoomName: string;
+      subjectName: string;
+      teacherEmail: string;
+      timeSlotLabel: string;
+    }> = [];
+
+    for (
+      const cursor = new Date(start);
+      cursor <= end;
+      cursor.setDate(cursor.getDate() + 1)
+    ) {
+      const iso = this.isoDate(cursor);
+      // Une séance du jour même n'a pas encore eu lieu pour tout le monde.
+      if (iso >= today) continue;
+
+      for (const entry of callable) {
+        if (entry.dayOfWeek !== cursor.getDay()) continue;
+        if (doneKeys.has(`${entry.id}|${iso}`)) continue;
+
+        missing.push({
+          scheduleEntryId: entry.id,
+          date: iso,
+          classRoomName: entry.classRoom?.name ?? '',
+          subjectName: entry.teachingAssignment?.subject?.name ?? '',
+          teacherEmail: entry.teacher?.email ?? '',
+          timeSlotLabel: entry.timeSlot?.label ?? '',
+        });
+      }
+    }
+
+    // Les plus récents d'abord : ce sont ceux qu'on peut encore rattraper.
+    return missing.sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  /** Date d'une valeur `date` PostgreSQL, au format `AAAA-MM-JJ`. */
+  private isoDate(value: Date | string): string {
+    if (typeof value === 'string') return value.slice(0, 10);
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(
+      value.getDate(),
+    ).padStart(2, '0')}`;
   }
 
   /**

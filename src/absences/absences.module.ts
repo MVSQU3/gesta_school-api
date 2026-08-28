@@ -6,10 +6,17 @@ import { ScheduleEntry } from '../schedule/entities/schedule-entry.entity';
 import { AbsencesController } from './absences.controller';
 import { AbsencesService } from './absences.service';
 import { Absence } from './entities/absence.entity';
+import { RollCall } from './entities/roll-call.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Absence, Enrollment, GradingPeriod, ScheduleEntry]),
+    TypeOrmModule.forFeature([
+      Absence,
+      RollCall,
+      Enrollment,
+      GradingPeriod,
+      ScheduleEntry,
+    ]),
   ],
   controllers: [AbsencesController],
   providers: [AbsencesService],
