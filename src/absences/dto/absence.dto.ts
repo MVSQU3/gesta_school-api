@@ -1,25 +1,27 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsDateString,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { HalfDay } from '../entities/absence.entity';
+import { AbsenceStatus } from '../entities/absence.entity';
 
+/** Ce qui est constaté pour un élève sur la séance appelée. */
 export class AbsenceEntryDto {
   @IsUUID('4', { message: "L'identifiant de l'inscription doit être un UUID valide" })
   enrollmentId: string;
 
-  @IsEnum(HalfDay, { message: 'La demi-journée doit être MORNING ou AFTERNOON' })
-  halfDay: HalfDay;
+  @IsEnum(AbsenceStatus, {
+    message: 'Le statut doit être ABSENT ou LATE',
+  })
+  status: AbsenceStatus;
 
   @IsOptional()
   @IsBoolean({ message: 'Le caractère justifié doit être un booléen' })
@@ -32,30 +34,39 @@ export class AbsenceEntryDto {
 }
 
 /**
- * Appel d'une classe : on enregistre les absents d'une date en une fois.
- * Les élèves non listés sont considérés présents ; leurs absences
- * éventuellement déjà saisies pour cette date sont retirées.
+ * Appel d'une séance : le relevé complet des écarts pour un cours donné.
+ *
+ * Le professeur envoie la liste des absents et des retardataires ; ceux qui
+ * n'y figurent pas sont présents. Un élève retiré de la liste voit son
+ * absence effacée — c'est un relevé, pas une suite d'ajouts.
+ *
+ * `scheduleEntryId` désigne la séance de l'emploi du temps, ce qui fixe à la
+ * fois la classe, la matière, l'enseignant et le créneau horaire. La date
+ * reste demandée : un même créneau revient chaque semaine.
  */
 export class RecordAbsencesDto {
-  @IsUUID('4', { message: "L'identifiant de la classe doit être un UUID valide" })
-  @IsNotEmpty({ message: 'La classe est obligatoire' })
-  classRoomId: string;
+  @IsUUID('4', { message: "L'identifiant de la séance doit être un UUID valide" })
+  @IsNotEmpty({ message: 'La séance de cours est obligatoire' })
+  scheduleEntryId: string;
 
-  @IsUUID('4', { message: "L'identifiant de l'année scolaire doit être un UUID valide" })
-  @IsNotEmpty({ message: "L'année scolaire est obligatoire" })
-  academicYearId: string;
-
-  @IsDateString({}, { message: 'La date doit être au format AAAA-MM-JJ' })
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'La date doit être au format AAAA-MM-JJ',
+  })
   date: string;
 
-  @IsArray({ message: 'Les absences doivent être fournies sous forme de liste' })
-  @ArrayMaxSize(600, { message: 'Trop d’absences envoyées en une seule fois' })
+  @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AbsenceEntryDto)
-  absences: AbsenceEntryDto[];
+  entries: AbsenceEntryDto[];
 }
 
+/** Correction d'une ligne d'assiduité, par la direction ou l'enseignant. */
 export class UpdateAbsenceDto {
+  @IsOptional()
+  @IsEnum(AbsenceStatus, { message: 'Le statut doit être ABSENT ou LATE' })
+  status?: AbsenceStatus;
+
   @IsOptional()
   @IsBoolean({ message: 'Le caractère justifié doit être un booléen' })
   isJustified?: boolean;

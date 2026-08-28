@@ -6,7 +6,7 @@ import { BalanceService, EnrollmentBalance } from '../common/balance/balance.ser
 import { BulletinsService } from '../bulletins/bulletins.service';
 import { Enrollment } from '../enrollments/entities/enrollment.entity';
 import { GradingPeriod } from '../grading-periods/entities/grading-period.entity';
-import { HalfDay } from '../absences/entities/absence.entity';
+import { AbsenceStatus } from '../absences/entities/absence.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Student } from './entities/student.entity';
 
@@ -47,7 +47,11 @@ export interface HistoryPayment {
 export interface HistoryAbsence {
   id: string;
   date: Date;
-  halfDay: HalfDay;
+  /** Absent ou en retard : le retard ne compte pas au cumul du bulletin. */
+  status: AbsenceStatus;
+  /** Matière du cours manqué — l'assiduité est relevée par séance. */
+  subjectName: string | null;
+  timeSlotLabel: string | null;
   isJustified: boolean;
   reason: string | null;
 }
@@ -232,7 +236,9 @@ export class StudentHistoryService {
       absences: absences.map((a) => ({
         id: a.id,
         date: a.date,
-        halfDay: a.halfDay,
+        status: a.status,
+        subjectName: a.subject?.name ?? null,
+        timeSlotLabel: a.timeSlot?.label ?? null,
         isJustified: a.isJustified,
         reason: a.reason,
       })),

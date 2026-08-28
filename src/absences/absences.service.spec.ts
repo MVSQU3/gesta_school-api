@@ -10,15 +10,16 @@ import { AuthUser } from '../common/decorators/current-user.decorator';
 import { Role } from '../common/enums/role.enum';
 import { Enrollment } from '../enrollments/entities/enrollment.entity';
 import { GradingPeriod } from '../grading-periods/entities/grading-period.entity';
-import { TeachingService } from '../teaching/teaching.service';
-import { Absence, HalfDay } from './entities/absence.entity';
+import { ScheduleEntry } from '../schedule/entities/schedule-entry.entity';
+import { Absence, AbsenceStatus } from './entities/absence.entity';
 import { AbsencesService } from './absences.service';
 import { AuditService } from '../audit/audit.service';
 
-describe('AbsencesService (appel et assiduité)', () => {
+describe('AbsencesService (appel par séance)', () => {
   let service: AbsencesService;
   let repos: Record<string, any>;
-  let teaching: any;
+  let manager: any;
+  let audit: any;
   let queryBuilder: any;
 
   const DIRECTOR = {
@@ -31,22 +32,44 @@ describe('AbsencesService (appel et assiduité)', () => {
     roles: [Role.TEACHER],
     schoolId: 'school-1',
   } as AuthUser;
-  const SECRETARY = {
-    id: 'sec-1',
-    roles: [Role.SECRETARY],
+  const OTHER_TEACHER = {
+    id: 'teach-2',
+    roles: [Role.TEACHER],
     schoolId: 'school-1',
   } as AuthUser;
 
-  /** Date passée, pour ne pas buter sur le refus des dates à venir. */
-  const yesterday = () => {
+  /** Dernier lundi écoulé : la séance de référence a lieu le lundi. */
+  const lastMonday = () => {
     const d = new Date();
-    d.setDate(d.getDate() - 1);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7 || 7));
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
+  /** Le mardi qui suit ce lundi — jour où la séance n'a pas lieu. */
+  const lastTuesday = () => {
+    const d = new Date(`${lastMonday()}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  /** Séance du lundi, français en 6ème A, assurée par TEACHER. */
+  const session = (overrides: any = {}) => ({
+    id: 'entry-1',
+    schoolId: 'school-1',
+    academicYearId: 'year-1',
+    classRoomId: 'class-1',
+    teacherId: 'teach-1',
+    dayOfWeek: 1,
+    timeSlotId: 'slot-1',
+    timeSlot: { id: 'slot-1', label: '1ère heure', isBreak: false, sequence: 1 },
+    classRoom: { name: '6ème A' },
+    teachingAssignment: { subjectId: 'sub-fr', subject: { name: 'Français' } },
+    ...overrides,
+  });
+
   const openPeriod = (overrides: any = {}) => ({
     id: 'period-1',
-    label: '1er Trimestre',
+    label: '1er Semestre',
     isClosed: false,
     sequence: 1,
     startDate: '2000-01-01',
@@ -55,10 +78,9 @@ describe('AbsencesService (appel et assiduité)', () => {
   });
 
   const dto = (overrides: any = {}) => ({
-    classRoomId: 'class-1',
-    academicYearId: 'year-1',
-    date: yesterday(),
-    absences: [{ enrollmentId: 'e1', halfDay: HalfDay.MORNING }],
+    scheduleEntryId: 'entry-1',
+    date: lastMonday(),
+    entries: [{ enrollmentId: 'enr-1', status: AbsenceStatus.ABSENT }],
     ...overrides,
   });
 
@@ -66,27 +88,40 @@ describe('AbsencesService (appel et assiduité)', () => {
     queryBuilder = {
       select: jest.fn().mockReturnThis(),
       addSelect: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       groupBy: jest.fn().mockReturnThis(),
       addGroupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       getRawMany: jest.fn().mockResolvedValue([]),
     };
 
     repos = {
       absence: {
         find: jest.fn().mockResolvedValue([]),
-        findOne: jest.fn(),
+        findOne: jest.fn().mockResolvedValue(null),
         create: jest.fn((d) => ({ ...d })),
-        merge: jest.fn((c, d) => Object.assign(c, d)),
-        save: jest.fn((a) => Promise.resolve(a)),
+        merge: jest.fn((current, d) => Object.assign(current, d)),
+        save: jest.fn((d) => Promise.resolve(d)),
         remove: jest.fn(),
         createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
       },
-      enrollment: { find: jest.fn().mockResolvedValue([{ id: 'e1' }, { id: 'e2' }]) },
-      period: { find: jest.fn().mockResolvedValue([openPeriod()]) },
+      enrollment: {
+        find: jest.fn().mockResolvedValue([{ id: 'enr-1' }]),
+      },
+      period: {
+        find: jest.fn().mockResolvedValue([openPeriod()]),
+      },
+      schedule: {
+        find: jest.fn().mockResolvedValue([session()]),
+        findOne: jest.fn().mockResolvedValue(session()),
+      },
     };
-    teaching = { findAll: jest.fn().mockResolvedValue([{ id: 'a1' }]) };
+
+    manager = { remove: jest.fn(), save: jest.fn() };
+    audit = { record: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -94,445 +129,320 @@ describe('AbsencesService (appel et assiduité)', () => {
         { provide: getRepositoryToken(Absence), useValue: repos.absence },
         { provide: getRepositoryToken(Enrollment), useValue: repos.enrollment },
         { provide: getRepositoryToken(GradingPeriod), useValue: repos.period },
-        { provide: TeachingService, useValue: teaching },
         {
-
-          provide: getDataSourceToken(),
-
-          // L'appel s'ecrit dans une transaction : le gestionnaire rejoue les
-
-          // appels sur le depot, pour que les assertions existantes tiennent.
-
-          useValue: {
-
-            transaction: jest.fn((cb: any) => cb(repos.absence)),
-
-          },
-
+          provide: getRepositoryToken(ScheduleEntry),
+          useValue: repos.schedule,
         },
-            { provide: AuditService, useValue: { record: jest.fn() } },
+        {
+          provide: getDataSourceToken(),
+          useValue: { transaction: jest.fn((cb: any) => cb(manager)) },
+        },
+        { provide: AuditService, useValue: audit },
       ],
     }).compile();
 
     service = module.get<AbsencesService>(AbsencesService);
   });
 
-  describe('contrôle de la date', () => {
-    it('refuse un appel daté du futur', async () => {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const date = tomorrow.toISOString().slice(0, 10);
+  describe('la séance commande l’appel', () => {
+    it('refuse une séance qui n’existe pas dans l’établissement', async () => {
+      repos.schedule.findOne.mockResolvedValue(null);
 
-      // On ne constate pas une absence qui n'a pas encore eu lieu.
-      await expect(
-        service.record(dto({ date }) as any, 'school-1', DIRECTOR),
-      ).rejects.toThrow(/date à venir/);
+      await expect(service.record(dto(), 'school-1', TEACHER)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
-    it('accepte le jour même', async () => {
-      const today = new Date().toISOString().slice(0, 10);
-
+    it('refuse à un enseignant le cours d’un collègue', async () => {
+      // L'appel revient à celui qui tient la classe : sans ce contrôle,
+      // n'importe quel professeur pouvait relever l'assiduité de tous.
       await expect(
-        service.record(dto({ date: today }) as any, 'school-1', DIRECTOR),
+        service.record(dto(), 'school-1', OTHER_TEACHER),
+      ).rejects.toThrow(/n'assurez pas ce cours/);
+    });
+
+    it('en dispense la direction, qui corrige quand l’enseignant n’a pas pu', async () => {
+      await expect(
+        service.record(dto(), 'school-1', DIRECTOR),
       ).resolves.toBeDefined();
     });
 
-    it('refuse une date que couvre aucune période', async () => {
+    it('refuse une date qui ne tombe pas le jour du cours', async () => {
+      // Le cours a lieu le lundi : on ne l'appelle pas pour un mardi.
+      await expect(
+        service.record(dto({ date: lastTuesday() }), 'school-1', TEACHER),
+      ).rejects.toThrow(/lundi/);
+    });
+
+    it('accepte une saisie différée, tant qu’elle vise le bon jour', async () => {
+      // Relever le mardi l'appel du lundi reste possible : c'est l'heure de
+      // saisie qui est libre, pas la séance visée.
+      await expect(
+        service.record(dto(), 'school-1', TEACHER),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('contrôle de la date', () => {
+    it('refuse un appel daté du futur', async () => {
+      const nextMonday = new Date(`${lastMonday()}T00:00:00`);
+      nextMonday.setDate(nextMonday.getDate() + 14);
+      const iso = `${nextMonday.getFullYear()}-${String(nextMonday.getMonth() + 1).padStart(2, '0')}-${String(nextMonday.getDate()).padStart(2, '0')}`;
+
+      await expect(
+        service.record(dto({ date: iso }), 'school-1', TEACHER),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('refuse une date que ne couvre aucune période', async () => {
       repos.period.find.mockResolvedValue([
-        openPeriod({ startDate: '2099-01-01', endDate: '2099-12-31' }),
+        openPeriod({ startDate: '2000-01-01', endDate: '2000-06-30' }),
       ]);
 
-      // L'absence ne serait comptée sur aucun bulletin et resterait invisible.
-      await expect(
-        service.record(dto() as any, 'school-1', DIRECTOR),
-      ).rejects.toThrow(/aucune période de notation/);
+      await expect(service.record(dto(), 'school-1', TEACHER)).rejects.toThrow(
+        /aucune période de notation/,
+      );
     });
 
     it('refuse une période clôturée', async () => {
       repos.period.find.mockResolvedValue([openPeriod({ isClosed: true })]);
 
-      // Les bulletins sont édités : leur cumul ne peut plus être contredit.
-      await expect(
-        service.record(dto() as any, 'school-1', DIRECTOR),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('ignore une période sans bornes de dates', async () => {
-      repos.period.find.mockResolvedValue([
-        openPeriod({ startDate: null, endDate: null }),
-      ]);
-
-      await expect(
-        service.record(dto() as any, 'school-1', DIRECTOR),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('rattache l’absence à la période qui couvre la date', async () => {
-      repos.period.find.mockResolvedValue([
-        openPeriod({ id: 'p1', startDate: '2000-01-01', endDate: '2000-12-31' }),
-        openPeriod({ id: 'p2', startDate: '2001-01-01', endDate: '2099-12-31' }),
-      ]);
-
-      await service.record(dto() as any, 'school-1', DIRECTOR);
-
-      // Le rattachement est figé : ajuster les dates de période ensuite ne
-      // doit pas déplacer les absences déjà constatées.
-      const [saved] = repos.absence.save.mock.calls[0];
-      expect(saved[0].gradingPeriodId).toBe('p2');
+      await expect(service.record(dto(), 'school-1', TEACHER)).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
-  describe('droit d’intervenir sur la classe', () => {
-    it('refuse un enseignant qui n’intervient pas dans la classe', async () => {
-      teaching.findAll.mockResolvedValue([]);
+  describe('enregistrement', () => {
+    it('rattache la matière et le créneau de la séance', async () => {
+      await service.record(dto(), 'school-1', TEACHER);
 
-      await expect(
-        service.record(dto() as any, 'school-1', TEACHER),
-      ).rejects.toThrow(/n'intervenez pas dans cette classe/);
+      const [saved] = manager.save.mock.calls[0];
+      expect(saved[0]).toMatchObject({
+        subjectId: 'sub-fr',
+        timeSlotId: 'slot-1',
+        scheduleEntryId: 'entry-1',
+        gradingPeriodId: 'period-1',
+        status: AbsenceStatus.ABSENT,
+      });
     });
 
-    it('accepte un enseignant affecté', async () => {
-      await expect(
-        service.record(dto() as any, 'school-1', TEACHER),
-      ).resolves.toBeDefined();
-    });
-
-    it('dispense la direction du contrôle', async () => {
-      teaching.findAll.mockResolvedValue([]);
-
-      await expect(
-        service.record(dto() as any, 'school-1', DIRECTOR),
-      ).resolves.toBeDefined();
-      expect(teaching.findAll).not.toHaveBeenCalled();
-    });
-
-    it('dispense le secrétariat en lecture seulement', async () => {
-      teaching.findAll.mockResolvedValue([]);
-      repos.enrollment.find.mockResolvedValue([]);
-
-      // Le secrétariat centralise le suivi mais ne constate pas l'appel ;
-      // l'écriture lui est fermée en amont, dans le contrôleur.
-      await expect(
-        service.getRollCall('school-1', 'class-1', 'year-1', yesterday(), SECRETARY),
-      ).resolves.toBeDefined();
-    });
-
-    it('refuse la lecture à un enseignant étranger à la classe', async () => {
-      teaching.findAll.mockResolvedValue([]);
-
-      await expect(
-        service.getRollCall('school-1', 'class-1', 'year-1', yesterday(), TEACHER),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('exige un établissement résolu', async () => {
-      await expect(
-        service.record(dto() as any, '', DIRECTOR),
-      ).rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  describe('enregistrement de l’appel', () => {
-    it('enregistre les absents déclarés', async () => {
-      const result = await service.record(
+    it('accepte le retard comme un statut à part entière', async () => {
+      await service.record(
         dto({
-          absences: [
-            { enrollmentId: 'e1', halfDay: HalfDay.MORNING },
-            { enrollmentId: 'e2', halfDay: HalfDay.AFTERNOON },
-          ],
-        }) as any,
+          entries: [{ enrollmentId: 'enr-1', status: AbsenceStatus.LATE }],
+        }),
         'school-1',
-        DIRECTOR,
+        TEACHER,
       );
 
-      expect(result.recorded).toBe(2);
+      const [saved] = manager.save.mock.calls[0];
+      expect(saved[0].status).toBe(AbsenceStatus.LATE);
     });
 
-    it('efface les absences retirées de la liste', async () => {
-      const previous = {
-        id: 'abs-1',
-        enrollmentId: 'e2',
-        halfDay: HalfDay.MORNING,
-      };
-      repos.absence.find.mockResolvedValue([previous]);
+    it('efface ce qui n’est plus déclaré : l’élève est repassé présent', async () => {
+      repos.absence.find.mockResolvedValue([
+        { id: 'abs-1', enrollmentId: 'enr-1' },
+      ]);
 
-      // Un élève retiré de la liste est de nouveau considéré présent.
-      const result = await service.record(dto() as any, 'school-1', DIRECTOR);
+      const result = await service.record(
+        dto({ entries: [] }),
+        'school-1',
+        TEACHER,
+      );
 
-      expect(repos.absence.remove).toHaveBeenCalledWith([previous]);
+      expect(manager.remove).toHaveBeenCalled();
       expect(result.cleared).toBe(1);
     });
 
-    it('met à jour une absence déjà constatée plutôt que d’en créer une seconde', async () => {
-      repos.absence.find.mockResolvedValue([
-        { id: 'abs-1', enrollmentId: 'e1', halfDay: HalfDay.MORNING },
-      ]);
-
-      await service.record(dto() as any, 'school-1', DIRECTOR);
-
-      expect(repos.absence.merge).toHaveBeenCalled();
-      expect(repos.absence.create).not.toHaveBeenCalled();
-      expect(repos.absence.remove).not.toHaveBeenCalled();
-    });
-
-    it('ignore un élève étranger à la classe', async () => {
-      repos.enrollment.find.mockResolvedValue([{ id: 'e1' }]);
-
+    it('écarte un élève étranger à la classe sans faire échouer l’appel', async () => {
       const result = await service.record(
         dto({
-          absences: [
-            { enrollmentId: 'e1', halfDay: HalfDay.MORNING },
-            { enrollmentId: 'etranger', halfDay: HalfDay.MORNING },
+          entries: [
+            { enrollmentId: 'enr-1', status: AbsenceStatus.ABSENT },
+            { enrollmentId: 'enr-autre-classe', status: AbsenceStatus.ABSENT },
           ],
-        }) as any,
+        }),
         'school-1',
-        DIRECTOR,
+        TEACHER,
       );
 
       expect(result.recorded).toBe(1);
     });
 
-    it('traite séparément matin et après-midi', async () => {
-      const result = await service.record(
-        dto({
-          absences: [
-            { enrollmentId: 'e1', halfDay: HalfDay.MORNING },
-            { enrollmentId: 'e1', halfDay: HalfDay.AFTERNOON },
-          ],
-        }) as any,
-        'school-1',
-        DIRECTOR,
-      );
+    it('journalise l’appel avec la matière et la classe', async () => {
+      await service.record(dto(), 'school-1', TEACHER);
 
-      expect(result.recorded).toBe(2);
+      const [entry] = audit.record.mock.calls[0];
+      expect(entry.summary).toContain('Français');
+      expect(entry.summary).toContain('6ème A');
     });
 
-    it('considère l’absence non justifiée par défaut', async () => {
-      await service.record(dto() as any, 'school-1', DIRECTOR);
-
-      const [saved] = repos.absence.save.mock.calls[0];
-      expect(saved[0].isJustified).toBe(false);
-    });
-
-    it('vide un motif réduit à des espaces', async () => {
-      await service.record(
-        dto({
-          absences: [
-            { enrollmentId: 'e1', halfDay: HalfDay.MORNING, reason: '   ' },
-          ],
-        }) as any,
-        'school-1',
-        DIRECTOR,
-      );
-
-      const [saved] = repos.absence.save.mock.calls[0];
-      expect(saved[0].reason).toBeNull();
-    });
-
-    it('trace l’auteur de l’appel', async () => {
-      await service.record(dto() as any, 'school-1', TEACHER);
-
-      const [saved] = repos.absence.save.mock.calls[0];
-      expect(saved[0].recordedByUserId).toBe('teach-1');
-    });
-
-    it('n’interroge pas les absences d’une classe vide', async () => {
-      repos.enrollment.find.mockResolvedValue([]);
-
-      const result = await service.record(dto() as any, 'school-1', DIRECTOR);
-      expect(result).toEqual({ recorded: 0, cleared: 0 });
-      expect(repos.absence.find).not.toHaveBeenCalled();
+    it('ne journalise rien quand il n’y a rien à écrire', async () => {
+      await service.record(dto({ entries: [] }), 'school-1', TEACHER);
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 
   describe('feuille d’appel', () => {
-    const enrolled = (id: string, lastName: string, firstName = 'Ama') => ({
-      id,
-      studentId: `st-${id}`,
-      student: { firstName, lastName },
-    });
-
-    it('rend une feuille vide pour une classe sans élève', async () => {
-      repos.enrollment.find.mockResolvedValue([]);
-
-      const sheet = await service.getRollCall(
-        'school-1',
-        'class-1',
-        'year-1',
-        '2026-10-05',
-        DIRECTOR,
-      );
-      expect(sheet.students).toEqual([]);
-    });
-
-    it('marque présent un élève sans absence', async () => {
-      repos.enrollment.find.mockResolvedValue([enrolled('e1', 'Kone')]);
-
-      const sheet = await service.getRollCall(
-        'school-1',
-        'class-1',
-        'year-1',
-        '2026-10-05',
-        DIRECTOR,
-      );
-      expect(sheet.students[0].morning).toBeNull();
-      expect(sheet.students[0].afternoon).toBeNull();
-    });
-
-    it('distingue les deux demi-journées', async () => {
-      repos.enrollment.find.mockResolvedValue([enrolled('e1', 'Kone')]);
-      repos.absence.find.mockResolvedValue([
+    it('rend « présent » comme absence de marque', async () => {
+      repos.enrollment.find.mockResolvedValue([
         {
-          id: 'abs-1',
-          enrollmentId: 'e1',
-          halfDay: HalfDay.MORNING,
-          isJustified: true,
-          reason: 'Rendez-vous médical',
+          id: 'enr-1',
+          studentId: 'st-1',
+          student: { firstName: 'Ama', lastName: 'Kouassi' },
         },
       ]);
 
-      const sheet = await service.getRollCall(
+      const result = await service.getRollCall(
         'school-1',
-        'class-1',
-        'year-1',
-        '2026-10-05',
-        DIRECTOR,
+        'entry-1',
+        lastMonday(),
+        TEACHER,
       );
-      expect(sheet.students[0].morning).toMatchObject({ isJustified: true });
-      expect(sheet.students[0].afternoon).toBeNull();
-    });
 
-    it('trie les élèves par nom puis prénom', async () => {
-      repos.enrollment.find.mockResolvedValue([
-        enrolled('e1', 'Kone', 'Yao'),
-        enrolled('e2', 'Bamba', 'Ali'),
-        enrolled('e3', 'Kone', 'Ama'),
-      ]);
-
-      const sheet = await service.getRollCall(
-        'school-1',
-        'class-1',
-        'year-1',
-        '2026-10-05',
-        DIRECTOR,
-      );
-      expect(sheet.students.map((s) => `${s.lastName} ${s.firstName}`)).toEqual([
-        'Bamba Ali',
-        'Kone Ama',
-        'Kone Yao',
-      ]);
-    });
-  });
-
-  describe('countByPeriod', () => {
-    it('sépare les demi-journées justifiées des autres', async () => {
-      queryBuilder.getRawMany.mockResolvedValue([
-        { enrollmentId: 'e1', isJustified: true, count: '2' },
-        { enrollmentId: 'e1', isJustified: false, count: '3' },
-      ]);
-
-      const counts = await service.countByPeriod('school-1', ['e1'], 'period-1');
-      expect(counts.get('e1')).toEqual({ justified: 2, unjustified: 3 });
-    });
-
-    it('convertit en nombre les compteurs renvoyés en chaîne', async () => {
-      queryBuilder.getRawMany.mockResolvedValue([
-        { enrollmentId: 'e1', isJustified: false, count: '7' },
-      ]);
-
-      const counts = await service.countByPeriod('school-1', ['e1'], 'period-1');
-      expect(counts.get('e1')!.unjustified).toBe(7);
-    });
-
-    it('n’interroge pas la base sans inscription à compter', async () => {
-      const counts = await service.countByPeriod('school-1', [], 'period-1');
-
-      // `IN ()` sans valeur produit une requête SQL invalide.
-      expect(counts.size).toBe(0);
-      expect(repos.absence.createQueryBuilder).not.toHaveBeenCalled();
-    });
-
-    it('n’inclut pas les élèves sans absence', async () => {
-      queryBuilder.getRawMany.mockResolvedValue([]);
-
-      const counts = await service.countByPeriod(
-        'school-1',
-        ['e1', 'e2'],
-        'period-1',
-      );
-      expect(counts.size).toBe(0);
-    });
-  });
-
-  describe('update et remove', () => {
-    it('justifie une absence après coup', async () => {
-      repos.absence.findOne.mockResolvedValue({ id: 'abs-1', isJustified: false });
-
-      const saved = await service.update(
-        'abs-1',
-        { isJustified: true, reason: 'Certificat médical' } as any,
-        'school-1',
-      );
-      expect(saved.isJustified).toBe(true);
-      expect(saved.reason).toBe('Certificat médical');
-    });
-
-    it('vide un motif réduit à des espaces', async () => {
-      repos.absence.findOne.mockResolvedValue({ id: 'abs-1' });
-
-      const saved = await service.update(
-        'abs-1',
-        { reason: '   ' } as any,
-        'school-1',
-      );
-      expect(saved.reason).toBeNull();
-    });
-
-    it('refuse une absence d’un autre établissement', async () => {
-      repos.absence.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.update('abs-x', {} as any, 'school-1'),
-      ).rejects.toThrow(NotFoundException);
-      await expect(service.remove('abs-x', 'school-1')).rejects.toThrow(
-        NotFoundException,
-      );
-    });
-
-    it('supprime une absence', async () => {
-      const absence = { id: 'abs-1' };
-      repos.absence.findOne.mockResolvedValue(absence);
-
-      await service.remove('abs-1', 'school-1');
-      expect(repos.absence.remove).toHaveBeenCalledWith(absence);
+      expect(result.students[0].mark).toBeNull();
+      expect(result.session.subjectName).toBe('Français');
     });
 
     it('exige un établissement résolu', async () => {
-      await expect(service.remove('abs-1', '')).rejects.toThrow(
-        ForbiddenException,
-      );
-      await expect(service.findByEnrollment('e1', '')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.getRollCall('', 'entry-1', lastMonday(), TEACHER),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
-  describe('relectures', () => {
-    it('renvoie une liste vide pour une classe sans inscription', async () => {
-      repos.enrollment.find.mockResolvedValue([]);
+  describe('séances proposées à l’enseignant', () => {
+    it('écarte les pauses, qui ne s’appellent pas', async () => {
+      repos.schedule.find.mockResolvedValue([
+        session(),
+        session({ id: 'entry-2', timeSlot: { isBreak: true, sequence: 2 } }),
+      ]);
 
-      await expect(
-        service.findByClassRoomAndDate('school-1', 'class-1', 'year-1', '2026-10-05'),
-      ).resolves.toEqual([]);
-      expect(repos.absence.find).not.toHaveBeenCalled();
+      const sessions = await service.getMySessions(
+        'school-1',
+        lastMonday(),
+        TEACHER,
+      );
+
+      expect(sessions).toHaveLength(1);
+    });
+  });
+
+  describe('cumul du bulletin', () => {
+    it('ne compte pas les retards comme des absences', async () => {
+      await service.countByPeriod('school-1', ['enr-1'], 'period-1');
+
+      // L'élève était là : un retard ne se compte pas en séance manquée.
+      const statusFilter = queryBuilder.andWhere.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('status'),
+      );
+      expect(statusFilter?.[1]).toEqual({ status: AbsenceStatus.ABSENT });
     });
 
-    it('classe l’historique d’un élève du plus récent au plus ancien', async () => {
-      await service.findByEnrollment('e1', 'school-1');
+    it('ne requête rien pour une liste vide', async () => {
+      const result = await service.countByPeriod('school-1', [], 'period-1');
+      expect(result.size).toBe(0);
+      expect(repos.absence.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
 
-      expect(repos.absence.find).toHaveBeenCalledWith(
-        expect.objectContaining({ order: { date: 'DESC' } }),
+  describe('suivi de la direction', () => {
+    it('exige un établissement résolu', async () => {
+      await expect(service.getOverview('', {})).rejects.toThrow(
+        ForbiddenException,
       );
+    });
+
+    it('ne retient que les élèves au-delà du seuil', async () => {
+      queryBuilder.getRawMany.mockResolvedValue([
+        {
+          enrollmentId: 'enr-1',
+          lastName: 'Aka',
+          firstName: 'Nadège',
+          classRoomId: 'c1',
+          classRoomName: '6ème A',
+          subjectId: 'sub-fr',
+          subjectName: 'Français',
+          unjustified: '6',
+          justified: '1',
+          late: '2',
+        },
+        {
+          enrollmentId: 'enr-2',
+          lastName: 'Traoré',
+          firstName: 'Ismaël',
+          classRoomId: 'c1',
+          classRoomName: '6ème A',
+          subjectId: 'sub-fr',
+          subjectName: 'Français',
+          unjustified: '1',
+          justified: '0',
+          late: '0',
+        },
+      ]);
+
+      const atRisk = await service.getAtRisk('school-1', 5, {});
+
+      expect(atRisk).toHaveLength(1);
+      expect(atRisk[0].lastName).toBe('Aka');
+      expect(atRisk[0].subjects).toContain('Français');
+    });
+
+    it('additionne les matières pour un même élève', async () => {
+      queryBuilder.getRawMany.mockResolvedValue([
+        {
+          enrollmentId: 'enr-1',
+          lastName: 'Aka',
+          firstName: 'Nadège',
+          classRoomId: 'c1',
+          classRoomName: '6ème A',
+          subjectId: 'sub-fr',
+          subjectName: 'Français',
+          unjustified: '3',
+          justified: '0',
+          late: '0',
+        },
+        {
+          enrollmentId: 'enr-1',
+          lastName: 'Aka',
+          firstName: 'Nadège',
+          classRoomId: 'c1',
+          classRoomName: '6ème A',
+          subjectId: 'sub-math',
+          subjectName: 'Mathématiques',
+          unjustified: '3',
+          justified: '0',
+          late: '0',
+        },
+      ]);
+
+      const atRisk = await service.getAtRisk('school-1', 5, {});
+
+      // Trois absences en français et trois en maths font six, pas trois.
+      expect(atRisk[0].unjustified).toBe(6);
+      expect(atRisk[0].subjects).toEqual(['Français', 'Mathématiques']);
+    });
+  });
+
+  describe('correction', () => {
+    it('refuse une ligne d’un autre établissement', async () => {
+      repos.absence.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.update('abs-1', { isJustified: true }, 'school-2'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('journalise la suppression', async () => {
+      repos.absence.findOne.mockResolvedValue({
+        id: 'abs-1',
+        subject: { name: 'Français' },
+      });
+
+      await service.remove('abs-1', 'school-1', DIRECTOR);
+
+      expect(audit.record).toHaveBeenCalled();
     });
   });
 });

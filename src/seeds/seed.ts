@@ -41,7 +41,7 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { DataSource, EntityManager } from 'typeorm';
 
-import { Absence, HalfDay } from '../absences/entities/absence.entity';
+import { Absence, AbsenceStatus } from '../absences/entities/absence.entity';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
 import {
   ClassRoom,
@@ -69,6 +69,11 @@ import { Student } from '../students/entities/student.entity';
 import { ClassRoomSubject } from '../subjects/entities/classroom-subject.entity';
 import { Subject } from '../subjects/entities/subject.entity';
 import { TeachingAssignment } from '../teaching/entities/teaching-assignment.entity';
+import {
+  DayOfWeek,
+  ScheduleEntry,
+} from '../schedule/entities/schedule-entry.entity';
+import { TimeSlot } from '../schedule/entities/time-slot.entity';
 import { User } from '../users/entities/user.entity';
 
 import {
@@ -479,6 +484,8 @@ async function seed(dataSource: DataSource): Promise<void> {
     const subjects: Subject[] = [];
     const classroomSubjects: ClassRoomSubject[] = [];
     const assignments: TeachingAssignment[] = [];
+    const timeSlots: TimeSlot[] = [];
+    const scheduleEntries: ScheduleEntry[] = [];
     const students: Student[] = [];
     const enrollments: Enrollment[] = [];
     const payments: Payment[] = [];
@@ -513,6 +520,36 @@ async function seed(dataSource: DataSource): Promise<void> {
         createdAt: date(2025, 6, 12, 8, 30),
       };
       schools.push(school);
+
+      /**
+       * Créneaux horaires de l'établissement, communs à toutes les classes.
+       *
+       * Six heures de cours et une pause : de quoi placer une séance par
+       * matière sans prétendre à une grille réaliste.
+       */
+      const slotsOfSchool: TimeSlot[] = [
+        { label: '1ère heure', startTime: '07:30', endTime: '08:30' },
+        { label: '2ème heure', startTime: '08:30', endTime: '09:30' },
+        { label: '3ème heure', startTime: '09:45', endTime: '10:45' },
+        { label: '4ème heure', startTime: '10:45', endTime: '11:45' },
+        { label: '5ème heure', startTime: '14:00', endTime: '15:00' },
+        { label: '6ème heure', startTime: '15:00', endTime: '16:00' },
+      ].map(
+        (slot, index) =>
+          ({
+            id: randomUUID(),
+            schoolId: school.id,
+            label: slot.label,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            sequence: index + 1,
+            isBreak: false,
+          }) as TimeSlot,
+      );
+      timeSlots.push(...slotsOfSchool);
+
+      /** Affectations de l'école, pour placer une séance par matière. */
+      const assignmentsOfClass: TeachingAssignment[] = [];
 
       // --- Personnel administratif ------------------------------------------
       const makeUser = (
@@ -643,15 +680,45 @@ async function seed(dataSource: DataSource): Promise<void> {
         for (const classSpec of spec.classes) {
           const classroom = classByName.get(classSpec.name)!;
           for (const subjectSpec of spec.subjects) {
-            assignments.push({
+            const assignment = {
               id: randomUUID(),
               schoolId: school.id,
               teacherId: teacherBySubject.get(subjectSpec.shortName)!.id,
               classRoomId: classroom.id,
               subjectId: subjectByShort.get(subjectSpec.shortName)!.id,
               academicYearId: year.id,
-            } as TeachingAssignment);
+            } as TeachingAssignment;
+            assignments.push(assignment);
+            assignmentsOfClass.push(assignment);
           }
+
+          /**
+           * Emploi du temps minimal : une séance par matière et par semaine.
+           *
+           * Il ne prétend pas produire une grille réaliste — il rend l'appel
+           * possible. L'assiduité se relève désormais par séance, et sans
+           * emploi du temps aucun professeur ne pourrait faire l'appel.
+           *
+           * Le placement suit les contraintes d'unicité de la table : une
+           * classe et un enseignant ne peuvent occuper deux fois le même
+           * créneau.
+           */
+          assignmentsOfClass
+            .filter((a) => a.classRoomId === classroom.id)
+            .forEach((assignment, index) => {
+              const slot = slotsOfSchool[index % slotsOfSchool.length];
+              const day = ((index % 5) + 1) as DayOfWeek;
+              scheduleEntries.push({
+                id: randomUUID(),
+                schoolId: school.id,
+                academicYearId: year.id,
+                teachingAssignmentId: assignment.id,
+                classRoomId: classroom.id,
+                teacherId: assignment.teacherId,
+                dayOfWeek: day,
+                timeSlotId: slot.id,
+              } as ScheduleEntry);
+            });
         }
       }
 
@@ -1039,8 +1106,22 @@ async function seed(dataSource: DataSource): Promise<void> {
             });
           }
 
-          // Absences de la période, par demi-journée.
+          /**
+           * Absences de la période, rattachées à une séance de cours.
+           *
+           * Le tirage se fait sur les séances de la classe : on choisit un
+           * cours, puis une date qui tombe le bon jour de la semaine. C'est
+           * la même contrainte que celle imposée aux enseignants — un cours
+           * du lundi ne s'appelle que pour un lundi.
+           */
+          const sessionsOfClass = scheduleEntries.filter(
+            (e) =>
+              e.classRoomId === classroom.id && e.academicYearId === year2025.id,
+          );
+
           for (const enrollment of classEnrollments) {
+            if (sessionsOfClass.length === 0) break;
+
             const count = chance(0.35)
               ? randInt(1, 8)
               : chance(0.5)
@@ -1048,9 +1129,13 @@ async function seed(dataSource: DataSource): Promise<void> {
                 : 0;
             const taken = new Set<string>();
             for (let i = 0; i < count; i++) {
+              const session =
+                sessionsOfClass[randInt(0, sessionsOfClass.length - 1)];
               const day = workingDayBetween(periodSpec.start, periodSpec.end);
-              const halfDay = chance(0.6) ? HalfDay.MORNING : HalfDay.AFTERNOON;
-              const key = `${isoDay(day)}|${halfDay}`;
+              // La date doit tomber le jour de la séance.
+              if (day.getDay() !== session.dayOfWeek) continue;
+
+              const key = `${isoDay(day)}|${session.timeSlotId}`;
               if (taken.has(key)) continue; // contrainte d'unicité
               taken.add(key);
 
@@ -1059,9 +1144,17 @@ async function seed(dataSource: DataSource): Promise<void> {
                 id: randomUUID(),
                 schoolId: school.id,
                 enrollmentId: enrollment.id,
+                scheduleEntryId: session.id,
+                subjectId: assignments.find(
+                  (a) => a.id === session.teachingAssignmentId,
+                )!.subjectId,
+                timeSlotId: session.timeSlotId,
                 gradingPeriodId: period.id,
                 date: isoDay(day) as unknown as Date,
-                halfDay,
+                // Un relevé sur cinq est un retard, pas une absence.
+                status: chance(0.2)
+                  ? AbsenceStatus.LATE
+                  : AbsenceStatus.ABSENT,
                 isJustified,
                 reason: isJustified ? pick(ABSENCE_REASONS) : null,
                 recordedByUserId: secretary.id,
@@ -1081,6 +1174,8 @@ async function seed(dataSource: DataSource): Promise<void> {
     await insertAll(manager, Subject, subjects);
     await insertAll(manager, ClassRoomSubject, classroomSubjects);
     await insertAll(manager, TeachingAssignment, assignments);
+    await insertAll(manager, TimeSlot, timeSlots);
+    await insertAll(manager, ScheduleEntry, scheduleEntries);
     await insertAll(manager, Student, students);
     await insertAll(manager, Enrollment, enrollments);
     await insertAll(manager, Payment, payments);

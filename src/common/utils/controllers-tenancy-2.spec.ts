@@ -124,7 +124,9 @@ describe('AbsencesController (appel)', () => {
     service = serviceMock(
       'record',
       'getRollCall',
-      'findByClassRoomAndDate',
+      'getMySessions',
+      'getOverview',
+      'getAtRisk',
       'findByEnrollment',
       'update',
       'remove',
@@ -144,14 +146,20 @@ describe('AbsencesController (appel)', () => {
 
   it('cantonne la feuille d’appel', () =>
     expectTenantScoped(
-      (u, s) => controller.getRollCall('c1', 'y1', '2026-10-05', u, s),
+      (u, s) => controller.getRollCall('entry-1', '2026-10-05', u, s),
       service.getRollCall,
     ));
 
-  it('cantonne la relecture par date', () =>
+  it('cantonne les séances proposées à l’enseignant', () =>
     expectTenantScoped(
-      (u, s) => controller.findByDate('c1', 'y1', '2026-10-05', u, s),
-      service.findByClassRoomAndDate,
+      (u, s) => controller.mySessions('2026-10-05', u, s),
+      service.getMySessions,
+    ));
+
+  it('cantonne le suivi de la direction', () =>
+    expectTenantScoped(
+      (u, s) => controller.overview(u, undefined, undefined, undefined, undefined, s),
+      service.getOverview,
     ));
 
   it('cantonne l’historique d’un élève', () =>

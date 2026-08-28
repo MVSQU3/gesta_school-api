@@ -40,16 +40,16 @@ L'ouverture crée automatiquement les périodes. Avec le découpage en semestres
 
 ## 3. Personnel
 
-Créé par la direction (ou le Super-Admin). Mot de passe : **6 caractères minimum**.
+Créé par la direction (ou le Super-Admin). Mot de passe : **10 caractères minimum** (aligné sur ce que le serveur génère).
 
 | Rôle | Email | Mot de passe |
 |---|---|---|
-| DIRECTOR | `direction@college-navire.edu.ci` | `Navire2026` |
-| SECRETARY | `secretariat@college-navire.edu.ci` | `Navire2026` |
-| ACCOUNTANT | `comptabilite@college-navire.edu.ci` | `Navire2026` |
-| TEACHER | `koffi.maths@college-navire.edu.ci` | `Navire2026` |
-| TEACHER | `kouame.francais@college-navire.edu.ci` | `Navire2026` |
-| TEACHER | `kone.svt@college-navire.edu.ci` | `Navire2026` |
+| DIRECTOR | `direction@college-navire.edu.ci` | `Navire2026!` |
+| SECRETARY | `secretariat@college-navire.edu.ci` | `Navire2026!` |
+| ACCOUNTANT | `comptabilite@college-navire.edu.ci` | `Navire2026!` |
+| TEACHER | `koffi.maths@college-navire.edu.ci` | `Navire2026!` |
+| TEACHER | `kouame.francais@college-navire.edu.ci` | `Navire2026!` |
+| TEACHER | `kone.svt@college-navire.edu.ci` | `Navire2026!` |
 
 ---
 
@@ -80,6 +80,62 @@ Créé par la direction (ou le Super-Admin). Mot de passe : **6 caractères mini
 
 **Affectations enseignants** — Koffi → Mathématiques (6ème A, 3ème A) ·
 Kouamé → Français (6ème A, 3ème A) · Koné → SVT (6ème A).
+
+---
+
+## 5 bis. Emploi du temps — **prérequis à l'appel**
+
+Depuis le passage de l'assiduité à la séance, **aucun appel n'est possible sans
+grille horaire**. À créer avant les élèves, depuis Direction → Emploi du temps.
+
+### Créneaux horaires de l'établissement
+
+| # | Libellé | Début | Fin | Pause |
+|---|---|---|---|---|
+| 1 | `1ère heure` | 07:30 | 08:30 | non |
+| 2 | `2ème heure` | 08:30 | 09:30 | non |
+| 3 | `Récréation` | 09:30 | 09:45 | **oui** |
+| 4 | `3ème heure` | 09:45 | 10:45 | non |
+| 5 | `4ème heure` | 10:45 | 11:45 | non |
+| 6 | `5ème heure` | 14:00 | 15:00 | non |
+| 7 | `6ème heure` | 15:00 | 16:00 | non |
+
+Les créneaux marqués « pause » ne sont jamais proposés à l'appel.
+
+### Grille de la 6ème A
+
+| Jour | Créneau | Matière | Enseignant |
+|---|---|---|---|
+| **Lundi** | 1ère heure (07:30) | **Français** | Kouamé |
+| **Lundi** | 2ème heure (08:30) | **Français** | Kouamé |
+| Lundi | 3ème heure (09:45) | Mathématiques | Koffi |
+| Mardi | 1ère heure (07:30) | Mathématiques | Koffi |
+| Mardi | 3ème heure (09:45) | SVT | Koné |
+| Jeudi | 1ère heure (07:30) | Français | Kouamé |
+| Vendredi | 2ème heure (08:30) | Mathématiques | Koffi |
+
+**Le lundi 7h30–9h30 de français en 6ème A** est votre exemple : c'est sur ces
+deux séances que se vérifient les règles ci-dessous.
+
+### Grille de la 3ème A
+
+| Jour | Créneau | Matière | Enseignant |
+|---|---|---|---|
+| Lundi | 3ème heure (09:45) | Français | Kouamé |
+| Mardi | 2ème heure (08:30) | Mathématiques | Koffi |
+| Jeudi | 3ème heure (09:45) | Mathématiques | Koffi |
+
+### Ce qu'il faut vérifier
+
+| Test | Attendu |
+|---|---|
+| Kouamé ouvre l'appel un **lundi** | Ses deux séances de français en 6ème A sont proposées |
+| Kouamé ouvre l'appel un **mardi** | Le français en 6ème A **n'apparaît pas** — il n'a pas cours |
+| Kouamé tente la séance du lundi **avec une date de mardi** | Refus : « Ce cours a lieu le lundi » |
+| Koffi ouvre l'appel un lundi | Il voit sa séance de maths, **pas** celles de français |
+| Kouamé saisit **le mardi** l'appel du **lundi** | Accepté — l'heure de saisie est libre, la séance visée reste celle du lundi |
+| La récréation | N'apparaît jamais dans la liste des séances |
+| Le directeur ouvre l'appel | Il voit **toutes** les séances du jour, pas seulement les siennes |
 
 ---
 
@@ -151,12 +207,24 @@ Sur le **1er Semestre**, classe 6ème A :
 | `Devoir n°1` | Mathématiques | DEVOIR | /20 | 14 | 11 | 9 |
 | `Devoir n°1` | Français | DEVOIR | /20 | 12 | 15 | 13 |
 
-**Absences 6ème A** — Ismaël : `10-11-2026` matin, non justifiée ·
-Nadège : `12-11-2026` après-midi, justifiée (motif : « rendez-vous médical »).
+**Assiduité 6ème A** — à saisir depuis l'écran Appel, séance par séance :
 
-Points à contrôler : une absence à une évaluation **ne compte pas comme un
-zéro**, et l'espace parent affiche la note **telle qu'elle a été saisie**
-(7 / 10, et non 14 / 20).
+| Séance | Élève | Statut | Justifiée |
+|---|---|---|---|
+| Lundi, Français 07:30 | Ismaël | Absent | non |
+| Lundi, Français 08:30 | Ismaël | Absent | non |
+| Lundi, Français 07:30 | Nadège | **Retard** | — |
+| Mardi, Maths 07:30 | Ismaël | Absent | oui (« rendez-vous médical ») |
+
+Points à contrôler :
+
+- une absence à une évaluation **ne compte pas comme un zéro** ;
+- l'espace parent affiche la note **telle qu'elle a été saisie** (7 / 10, et
+  non 14 / 20) ;
+- un **retard n'est pas compté** dans les séances manquées du bulletin ;
+- au bulletin, l'unité est la **séance**, plus la demi-journée ;
+- dans Direction → Assiduité, Ismaël doit ressortir avec 3 séances manquées
+  dont 2 non justifiées, réparties sur français et mathématiques.
 
 ---
 

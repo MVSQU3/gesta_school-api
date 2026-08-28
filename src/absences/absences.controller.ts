@@ -28,11 +28,98 @@ export class AbsencesController {
   constructor(private readonly service: AbsencesService) {}
 
   /**
-   * Appel d'une classe pour une date : enregistre les absents.
+   * Séances qu'un enseignant peut appeler à une date donnée.
    *
-   * Réservé à l'enseignant et à la direction : l'appel se constate en classe.
-   * Le secrétariat garde la consultation, la justification a posteriori et la
-   * suppression, mais ne constate pas lui-même les absences.
+   * Déclarée avant les routes paramétrées. Le professeur choisit une date et
+   * on lui propose ses cours de ce jour-là : sans cette liste, il devrait
+   * deviner quel créneau viser.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.TEACHER)
+  @Get('my-sessions')
+  async mySessions(
+    @Query('date') date: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    return await this.service.getMySessions(
+      resolveSchoolId(user, querySchoolId),
+      date,
+      user,
+    );
+  }
+
+  /**
+   * Feuille d'appel d'une séance : les élèves de la classe et leur statut.
+   *
+   * La séance fixe la classe, la matière et le créneau ; la date reste
+   * nécessaire, un même créneau revenant chaque semaine.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.TEACHER)
+  @Get('roster')
+  async getRollCall(
+    @Query('scheduleEntryId') scheduleEntryId: string,
+    @Query('date') date: string,
+    @CurrentUser() user: AuthUser,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    return await this.service.getRollCall(
+      resolveSchoolId(user, querySchoolId),
+      scheduleEntryId,
+      date,
+      user,
+    );
+  }
+
+  /**
+   * Suivi de l'assiduité par matière et par classe — espace de la direction.
+   *
+   * Fermé aux enseignants : un professeur relève l'assiduité de ses propres
+   * cours, il n'a pas à consulter celle de ses collègues.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Get('overview')
+  async overview(
+    @CurrentUser() user: AuthUser,
+    @Query('academicYearId') academicYearId?: string,
+    @Query('gradingPeriodId') gradingPeriodId?: string,
+    @Query('classRoomId') classRoomId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    return await this.service.getOverview(
+      resolveSchoolId(user, querySchoolId),
+      { academicYearId, gradingPeriodId, classRoomId, subjectId },
+    );
+  }
+
+  /**
+   * Élèves dépassant un seuil d'absences non justifiées.
+   *
+   * Le seuil est fourni par l'appelant : ce qui alerte en terminale n'alerte
+   * pas en sixième, et l'établissement seul sait où il place la limite.
+   */
+  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR)
+  @Get('at-risk')
+  async atRisk(
+    @CurrentUser() user: AuthUser,
+    @Query('threshold') threshold?: string,
+    @Query('academicYearId') academicYearId?: string,
+    @Query('gradingPeriodId') gradingPeriodId?: string,
+    @Query('schoolId') querySchoolId?: string,
+  ) {
+    return await this.service.getAtRisk(
+      resolveSchoolId(user, querySchoolId),
+      Number(threshold) || 5,
+      { academicYearId, gradingPeriodId },
+    );
+  }
+
+  /**
+   * Appel d'une séance.
+   *
+   * Réservé à l'enseignant du créneau et à la direction : l'appel se constate
+   * en cours. Le secrétariat garde la consultation par élève, mais ne
+   * constate pas lui-même.
    */
   @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.TEACHER)
   @Post()
@@ -45,46 +132,6 @@ export class AbsencesController {
       dto,
       resolveSchoolId(user, querySchoolId),
       user,
-    );
-  }
-
-  /**
-   * Feuille d'appel d'une classe à une date : les élèves et leur statut sur
-   * les deux demi-journées.
-   */
-  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.TEACHER)
-  @Get('roster')
-  async getRollCall(
-    @Query('classRoomId') classRoomId: string,
-    @Query('academicYearId') academicYearId: string,
-    @Query('date') date: string,
-    @CurrentUser() user: AuthUser,
-    @Query('schoolId') querySchoolId?: string,
-  ) {
-    return await this.service.getRollCall(
-      resolveSchoolId(user, querySchoolId),
-      classRoomId,
-      academicYearId,
-      date,
-      user,
-    );
-  }
-
-  /** Relecture de l'appel d'une classe à une date. */
-  @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY, Role.TEACHER)
-  @Get()
-  async findByDate(
-    @Query('classRoomId') classRoomId: string,
-    @Query('academicYearId') academicYearId: string,
-    @Query('date') date: string,
-    @CurrentUser() user: AuthUser,
-    @Query('schoolId') querySchoolId?: string,
-  ): Promise<Absence[]> {
-    return await this.service.findByClassRoomAndDate(
-      resolveSchoolId(user, querySchoolId),
-      classRoomId,
-      academicYearId,
-      date,
     );
   }
 
@@ -102,7 +149,7 @@ export class AbsencesController {
     );
   }
 
-  /** Justification d'une absence a posteriori. */
+  /** Correction d'une ligne : statut, justification, motif. */
   @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
   @Patch(':id')
   async update(
@@ -115,6 +162,7 @@ export class AbsencesController {
       id,
       dto,
       resolveSchoolId(user, querySchoolId),
+      user,
     );
   }
 
@@ -125,6 +173,10 @@ export class AbsencesController {
     @CurrentUser() user: AuthUser,
     @Query('schoolId') querySchoolId?: string,
   ): Promise<{ message: string }> {
-    return await this.service.remove(id, resolveSchoolId(user, querySchoolId));
+    return await this.service.remove(
+      id,
+      resolveSchoolId(user, querySchoolId),
+      user,
+    );
   }
 }
