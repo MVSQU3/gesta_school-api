@@ -12,6 +12,7 @@ import { School } from '../schools/entities/school.entity';
 import { Student } from '../students/entities/student.entity';
 import { User } from '../users/entities/user.entity';
 import { AdminService } from './admin.service';
+import { AuditService } from '../audit/audit.service';
 
 describe('AdminService (administration de la plateforme)', () => {
   let service: AdminService;
@@ -66,6 +67,7 @@ describe('AdminService (administration de la plateforme)', () => {
         { provide: getRepositoryToken(Student), useValue: repos.student },
         { provide: getRepositoryToken(School), useValue: repos.school },
         { provide: getRepositoryToken(User), useValue: repos.user },
+            { provide: AuditService, useValue: { record: jest.fn() } },
       ],
     }).compile();
 

@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
 import { AuditService } from '../audit/audit.service';
 import { ClassRoom } from '../classrooms/entities/classroom.entity';
@@ -26,6 +26,8 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
   let service: EnrollmentsService;
   let repos: Record<string, any>;
   let students: any;
+  let dataSourceMock: any;
+  let audit: any;
   let references: any;
   let balance: any;
 
@@ -67,6 +69,20 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
       },
       payment: { count: jest.fn().mockResolvedValue(0) },
     };
+    /**
+     * Le lot entier s'écrit dans une transaction : le gestionnaire rejoue les
+     * appels sur des mocks, et le compteur d'ouvertures sert d'assertion.
+     */
+    audit = { record: jest.fn(), diff: jest.fn().mockReturnValue(null) };
+    dataSourceMock = {
+      transaction: jest.fn((cb: any) =>
+        cb({
+          create: jest.fn((_e: unknown, d: any) => ({ ...d })),
+          save: jest.fn((d: any) => Promise.resolve({ id: 'enr-new', ...d })),
+          getRepository: jest.fn(),
+        }),
+      ),
+    };
     students = {
       create: jest.fn(),
       findOneOfSchool: jest
@@ -95,12 +111,113 @@ describe('EnrollmentsService (cycle de vie d’un dossier)', () => {
         { provide: BalanceService, useValue: balance },
         {
           provide: AuditService,
-          useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
+          useValue: audit,
         },
+        { provide: getDataSourceToken(), useValue: dataSourceMock },
       ],
     }).compile();
 
     service = module.get<EnrollmentsService>(EnrollmentsService);
+  });
+
+  describe('ardoise des années précédentes', () => {
+    it('signale un reliquat d’une année antérieure au guichet', async () => {
+      repos.enrollment.findOne.mockResolvedValue(enrollment());
+      repos.enrollment.find.mockResolvedValue([
+        {
+          id: 'enr-old',
+          reference: 'INS-CMB-25-0042',
+          academicYear: { label: '2025-2026' },
+        },
+      ]);
+      balance.compute.mockResolvedValue({ balance: 45000 });
+
+      const result = await service.findByReference('school-1', 'INS-CMB-26-0001');
+
+      // Sans ce signal, la caisse encaissait la nouvelle scolarité sans
+      // savoir qu'une ardoise courait.
+      expect(result.previousDebts).toEqual([
+        {
+          reference: 'INS-CMB-25-0042',
+          academicYearLabel: '2025-2026',
+          balance: 45000,
+        },
+      ]);
+    });
+
+    it('n’affiche pas un dossier antérieur intégralement réglé', async () => {
+      repos.enrollment.findOne.mockResolvedValue(enrollment());
+      repos.enrollment.find.mockResolvedValue([
+        { id: 'enr-old', reference: 'INS-CMB-25-0042', academicYear: {} },
+      ]);
+      balance.compute.mockResolvedValue({ balance: 0 });
+
+      const result = await service.findByReference('school-1', 'INS-CMB-26-0001');
+      expect(result.previousDebts).toEqual([]);
+    });
+  });
+
+  describe('renouvellement et année clôturée', () => {
+    it('refuse de renouveler un dossier d’une année close', async () => {
+      repos.enrollment.findOne.mockResolvedValue(
+        enrollment({ status: EnrollmentStatus.EXPIRED }),
+      );
+      repos.year.findOne.mockResolvedValue({
+        id: 'year-0',
+        label: '2024-2025',
+        isActive: false,
+      });
+
+      // Sinon le renouvellement rouvrait par la bande ce que la création
+      // interdit : un dossier vivant dans une année terminée.
+      await expect(service.renew('enr-1', 'school-1')).rejects.toThrow(
+        /clôturée/,
+      );
+    });
+
+    it('laisse passer un dossier de l’année en cours', async () => {
+      repos.enrollment.findOne.mockResolvedValue(
+        enrollment({ status: EnrollmentStatus.EXPIRED }),
+      );
+      repos.enrollment.save.mockImplementation((e: any) => Promise.resolve(e));
+
+      await expect(service.renew('enr-1', 'school-1')).resolves.toBeDefined();
+    });
+  });
+
+  describe('journal du renouvellement', () => {
+    it('conserve l’ancienne référence, celle que la famille détient', async () => {
+      repos.enrollment.findOne.mockResolvedValue(
+        enrollment({
+          reference: 'INS-CMB-26-0001',
+          status: EnrollmentStatus.EXPIRED,
+        }),
+      );
+      repos.enrollment.save.mockImplementation((e: any) => Promise.resolve(e));
+
+      await service.renew('enr-1', 'school-1');
+
+      const [entry] = audit.record.mock.calls[0];
+      expect(entry.action).toBe('ENROLLMENT_RENEWED');
+      expect(entry.summary).toContain('INS-CMB-26-0001');
+    });
+  });
+
+  describe('atomicité', () => {
+    it('ouvre une seule transaction pour tout le lot', async () => {
+      await service.bulkEnroll(
+        {
+          classRoomId: 'class-1',
+          academicYearId: 'year-1',
+          studentIds: ['st-1', 'st-2'],
+        } as any,
+        'school-1',
+      );
+
+      // Une panne au trentieme eleve d'une liste de cinquante ne doit pas
+      // laisser trente dossiers derriere elle.
+      expect(dataSourceMock.transaction).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('année clôturée', () => {

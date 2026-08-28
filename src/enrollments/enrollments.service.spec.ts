@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AuditService } from '../audit/audit.service';
 import { BalanceService } from '../common/balance/balance.service';
 import { ReferencesService } from '../common/counters/references.service';
@@ -18,6 +18,11 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
   let mockSchoolRepository: any;
   let mockClassRoomRepository: any;
   let mockAcademicYearRepository: any;
+  /**
+   * Gestionnaire de transaction : l'ouverture d'un dossier écrit la fiche
+   * élève, la référence et l'inscription en une seule fois.
+   */
+  let manager: any;
   let mockPaymentRepository: any;
   let mockStudentsService: any;
   let mockReferencesService: any;
@@ -57,6 +62,12 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
     };
 
     // L'année scolaire est désormais vérifiée avant toute écriture
+    manager = {
+      create: jest.fn((_entity: unknown, d: any) => ({ ...d })),
+      save: jest.fn((d: any) => Promise.resolve({ id: 'enrollment-uuid-1', ...d })),
+      getRepository: jest.fn(),
+    };
+
     mockAcademicYearRepository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'ac-uuid-1',
@@ -116,6 +127,10 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
           provide: AuditService,
           useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
         },
+            {
+              provide: getDataSourceToken(),
+              useValue: { transaction: jest.fn((cb: any) => cb(manager)) },
+            },
       ],
     }).compile();
 
@@ -204,7 +219,8 @@ describe('EnrollmentsService (Tests Unitaires Métier)', () => {
         'user-secretaire-1',
       );
 
-      expect(mockEnrollmentRepository.create).toHaveBeenCalledWith(
+      expect(manager.create).toHaveBeenCalledWith(
+        Enrollment,
         expect.objectContaining({
           totalDue: 150000,
           createdByUserId: 'user-secretaire-1',

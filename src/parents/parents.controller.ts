@@ -21,6 +21,7 @@ import { resolveSchoolId } from '../common/utils/resolve-school';
 import { CreateParentDto } from './dto/create-parent.dto';
 import { LinkChildDto } from './dto/link-child.dto';
 import { ParentsService } from './parents.service';
+import { PaginationQueryDto } from '../common/dto/pagination.dto';
 
 /**
  * Deux familles de routes cohabitent ici, avec deux régimes d'autorisation
@@ -171,6 +172,7 @@ export class ParentsController {
   @Roles(Role.SUPER_ADMIN, Role.DIRECTOR, Role.SECRETARY)
   @Get()
   async findAll(
+    @Query() pagination: PaginationQueryDto,
     @CurrentUser() user: AuthUser,
     @Query('search') search?: string,
     @Query('schoolId') querySchoolId?: string,
@@ -178,6 +180,7 @@ export class ParentsController {
     return await this.parentsService.findAllOfSchool(
       resolveSchoolId(user, querySchoolId),
       search,
+      pagination,
     );
   }
 

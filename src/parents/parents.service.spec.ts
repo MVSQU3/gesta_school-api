@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AbsencesService } from '../absences/absences.service';
 import { AuditService } from '../audit/audit.service';
 import { BulletinsService } from '../bulletins/bulletins.service';
@@ -35,6 +35,8 @@ describe('ParentsService (espace parent et tutelle)', () => {
   let bulletins: any;
   let gradingPeriods: any;
   let audit: any;
+  let manager: any;
+  let dataSource: any;
 
   const link = (o: any = {}) => ({
     id: 'link-1',
@@ -104,6 +106,13 @@ describe('ParentsService (espace parent et tutelle)', () => {
     bulletins = { getStudentBulletin: jest.fn().mockResolvedValue({}) };
     gradingPeriods = { findAllByYear: jest.fn().mockResolvedValue([{ id: 'period-1' }]) };
     audit = { record: jest.fn() };
+    // Le compte parent et ses rattachements s'écrivent dans une transaction :
+    // le gestionnaire rejoue les appels sur des mocks observables.
+    manager = {
+      create: jest.fn((_e: unknown, d: any) => ({ id: 'parent-1', ...d })),
+      save: jest.fn((d: any) => Promise.resolve(d)),
+    };
+    dataSource = { transaction: jest.fn((cb: any) => cb(manager)) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -120,6 +129,7 @@ describe('ParentsService (espace parent et tutelle)', () => {
         { provide: BulletinsService, useValue: bulletins },
         { provide: GradingPeriodsService, useValue: gradingPeriods },
         { provide: AuditService, useValue: audit },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
@@ -476,7 +486,7 @@ describe('ParentsService (espace parent et tutelle)', () => {
         'school-1',
       );
 
-      const saved = usersRepo.save.mock.calls[0][0];
+      const saved = manager.save.mock.calls[0][0];
       expect(saved.roles).toEqual([Role.PARENT]);
       expect(saved.mustChangePassword).toBe(true);
       // L'email est normalisé : sans cela, deux comptes ne différant que par
@@ -497,7 +507,7 @@ describe('ParentsService (espace parent et tutelle)', () => {
         { email: 'p@e.ci', firstName: 'Y', lastName: 'K', gender: Gender.FEMALE } as any,
         'school-1',
       );
-      const saved = usersRepo.save.mock.calls[0][0];
+      const saved = manager.save.mock.calls[0][0];
       expect(saved.passwordHash).not.toBe(temporaryPassword);
       expect(saved).not.toHaveProperty('password');
     });
@@ -527,7 +537,7 @@ describe('ParentsService (espace parent et tutelle)', () => {
         ),
       ).rejects.toThrow(NotFoundException);
       // Le compte ne doit pas exister si le rattachement échoue.
-      expect(usersRepo.save).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
     });
   });
 
@@ -566,6 +576,7 @@ describe('ParentsService (espace parent et tutelle)', () => {
     it('ferme les sessions ouvertes en désactivant le compte', async () => {
       usersRepo.findOne.mockResolvedValue(parentUser());
       await service.setActive('parent-1', false, 'school-1');
+      // setActive n'est pas transactionnel : une seule écriture.
       const saved = usersRepo.save.mock.calls[0][0];
       expect(saved.isActive).toBe(false);
       expect(saved.passwordChangedAt).toBeInstanceOf(Date);

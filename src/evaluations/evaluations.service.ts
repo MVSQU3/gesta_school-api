@@ -23,6 +23,8 @@ import {
 } from './dto/evaluation.dto';
 import { Evaluation, EvaluationType } from './entities/evaluation.entity';
 import { Grade } from './entities/grade.entity';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 
 @Injectable()
 export class EvaluationsService {
@@ -38,6 +40,7 @@ export class EvaluationsService {
     @InjectRepository(Enrollment)
     private readonly enrollmentRepository: Repository<Enrollment>,
     private readonly teachingService: TeachingService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -345,8 +348,24 @@ export class EvaluationsService {
       evaluation.gradingPeriod.academicYearId,
     );
 
+    const { id: evaluationId, title } = evaluation;
+
     await this.evaluationRepository.remove(evaluation);
-    return { message: `L'évaluation « ${evaluation.title} » a été supprimée.` };
+
+    // Supprimer une évaluation emporte ses notes en cascade : c'est l'acte le
+    // plus destructeur de l'espace enseignant.
+    void this.auditService.record(
+      {
+        action: AuditAction.EVALUATION_DELETED,
+        entityType: 'evaluations',
+        entityId: evaluationId,
+        schoolId,
+        summary: `Évaluation « ${title} » supprimée, avec les notes qui s'y rattachaient`,
+      },
+      user,
+    );
+
+    return { message: `L'évaluation « ${title} » a été supprimée.` };
   }
 
   /**
@@ -485,6 +504,24 @@ export class EvaluationsService {
     });
 
     await this.gradeRepository.save(toSave);
+
+    /**
+     * Une note contestée par une famille doit pouvoir être rattachée à qui
+     * l'a saisie, et quand. Le détail des notes n'est pas repris dans le
+     * journal : il vit dans la feuille de notes, et l'y recopier ferait du
+     * journal une base de données parallèle.
+     */
+    void this.auditService.record(
+      {
+        action: AuditAction.GRADES_SAVED,
+        entityType: 'evaluations',
+        entityId: evaluationId,
+        schoolId,
+        summary: `${toSave.length} note(s) saisie(s) pour « ${evaluation.title} » (${evaluation.subject?.name ?? 'matière'})`,
+      },
+      user,
+    );
+
     return { saved: toSave.length };
   }
 }

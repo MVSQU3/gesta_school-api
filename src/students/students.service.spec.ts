@@ -34,8 +34,13 @@ describe('StudentsService (fiches élèves)', () => {
       orderBy: jest.fn().mockReturnThis(),
       addOrderBy: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      // La liste est paginée : `skip`/`take` puis `getManyAndCount`.
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
       getMany: jest.fn().mockResolvedValue([]),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
 
     studentRepo = {

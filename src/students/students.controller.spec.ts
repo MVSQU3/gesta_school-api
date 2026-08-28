@@ -119,8 +119,13 @@ describe('StudentsController (fiches élèves)', () => {
 
   describe('lecture directe', () => {
     it('utilise toujours l’école du jeton', async () => {
-      await controller.findAll(SECRETARY, 'year-1');
-      expect(students.findAllBySchool).toHaveBeenCalledWith('school-1', 'year-1');
+      const pagination = { page: 1, limit: 25 };
+      await controller.findAll(pagination, SECRETARY, 'year-1');
+      expect(students.findAllBySchool).toHaveBeenCalledWith(
+        'school-1',
+        'year-1',
+        pagination,
+      );
 
       await controller.findOneBySchool('st-1', SECRETARY);
       expect(students.findOneBySchool).toHaveBeenCalledWith(

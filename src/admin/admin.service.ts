@@ -6,6 +6,9 @@ import { Student, School, User } from "../entities/index";
 import * as bcrypt from 'bcrypt';
 import { Role } from "src/common/enums/role.enum";
 import { generateTemporaryPassword } from "../common/utils/generate-password";
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuthUser } from '../common/decorators/current-user.decorator';
 
 @Injectable()
 export class AdminService implements OnModuleInit {
@@ -18,6 +21,7 @@ export class AdminService implements OnModuleInit {
     private readonly schoolRepository: Repository<School>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    private readonly auditService: AuditService,
   ) { }
 
   async onModuleInit() {
@@ -174,7 +178,10 @@ export class AdminService implements OnModuleInit {
     return school;
   }
 
-  async createSchool(createSchoolDto: CreateSchoolDto): Promise<School> {
+  async createSchool(
+    createSchoolDto: CreateSchoolDto,
+    actor?: AuthUser,
+  ): Promise<School> {
     const existing = await this.schoolRepository.findOne({
       where: { slug: createSchoolDto.slug.toUpperCase() },
     });
@@ -190,7 +197,24 @@ export class AdminService implements OnModuleInit {
       slug: createSchoolDto.slug.toUpperCase(),
     });
 
-    return await this.schoolRepository.save(school);
+    const saved = await this.schoolRepository.save(school);
+
+    /**
+     * `schoolId` pointe sur l'établissement créé : la ligne appartient à son
+     * propre journal, et le directeur qui prendra la main la verra.
+     */
+    void this.auditService.record(
+      {
+        action: AuditAction.SCHOOL_CREATED,
+        entityType: 'schools',
+        entityId: saved.id,
+        schoolId: saved.id,
+        summary: `Établissement ${saved.name} (${saved.slug}) créé`,
+      },
+      actor,
+    );
+
+    return saved;
   }
 
 

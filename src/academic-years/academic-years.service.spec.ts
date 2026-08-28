@@ -9,6 +9,7 @@ import { Enrollment } from '../enrollments/entities/enrollment.entity';
 import { GradingPeriodsService } from '../grading-periods/grading-periods.service';
 import { AcademicYear } from './entities/academic-year.entity';
 import { AcademicYearsService } from './academic-years.service';
+import { AuditService } from '../audit/audit.service';
 
 describe('AcademicYearsService (années scolaires)', () => {
   let service: AcademicYearsService;
@@ -39,7 +40,10 @@ describe('AcademicYearsService (années scolaires)', () => {
       remove: jest.fn(),
     };
     enrollmentRepo = { count: jest.fn().mockResolvedValue(0) };
-    periodsService = { generateForAcademicYear: jest.fn() };
+    periodsService = {
+      generateForAcademicYear: jest.fn(),
+      closeAllOfYear: jest.fn().mockResolvedValue(3),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -48,6 +52,10 @@ describe('AcademicYearsService (années scolaires)', () => {
         { provide: getRepositoryToken(Enrollment), useValue: enrollmentRepo },
         { provide: GradingPeriodsService, useValue: periodsService },
         { provide: getDataSourceToken(), useValue: dataSource },
+            {
+        provide: AuditService,
+        useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
+      },
       ],
     }).compile();
 
@@ -210,6 +218,27 @@ describe('AcademicYearsService (années scolaires)', () => {
       await service.findAll();
 
       expect(yearRepo.find).toHaveBeenCalledWith({ order: { label: 'DESC' } });
+    });
+  });
+
+  describe('clôture de l’année', () => {
+    it('clôture aussi ses périodes de notation', async () => {
+      await service.update('year-1', { isActive: false } as any, 'school-1');
+
+      // Sans cela, un enseignant pouvait encore saisir des notes sur le
+      // dernier trimestre d'une année terminée.
+      expect(periodsService.closeAllOfYear).toHaveBeenCalledWith(
+        'year-1',
+        'school-1',
+      );
+    });
+
+    it('ne rouvre pas les périodes en réactivant une année', async () => {
+      await service.update('year-1', { isActive: true } as any, 'school-1');
+
+      // Une période close l'a été pour une raison — la fin du trimestre — que
+      // la réactivation de l'année ne remet pas en cause.
+      expect(periodsService.closeAllOfYear).not.toHaveBeenCalled();
     });
   });
 });

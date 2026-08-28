@@ -163,7 +163,7 @@ export class EnrollmentsController {
     @Query('schoolId') querySchoolId?: string,
   ): Promise<Enrollment> {
     const schoolId = resolveSchoolId(user, querySchoolId);
-    return await this.enrollmentsService.renew(id, schoolId);
+    return await this.enrollmentsService.renew(id, schoolId, user);
   }
 
   /**

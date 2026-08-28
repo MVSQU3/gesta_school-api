@@ -9,6 +9,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
 import { resolveSchoolId } from '../common/utils/resolve-school';
+import { PaginationQueryDto } from '../common/dto/pagination.dto';
 
 @Controller('api/v1/students')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -83,10 +84,15 @@ export class StudentsController {
   @Roles(Role.DIRECTOR, Role.SECRETARY)
   @Get()
   findAll(
+    @Query() pagination: PaginationQueryDto,
     @CurrentUser() user: AuthUser,
     @Query('academicYearId') academicYearId?: string,
   ) {
-    return this.studentsService.findAllBySchool(user.schoolId, academicYearId);
+    return this.studentsService.findAllBySchool(
+      user.schoolId,
+      academicYearId,
+      pagination,
+    );
   }
 
   @Roles(Role.DIRECTOR, Role.SECRETARY)

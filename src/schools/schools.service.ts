@@ -101,9 +101,31 @@ export class SchoolsService {
     return saved;
   }
 
-  async remove(id: string): Promise<{ message: string }> {
+  async remove(
+    id: string,
+    actor?: AuthUser,
+  ): Promise<{ message: string }> {
     const school = await this.findOne(id);
+    const { id: schoolId, name, slug } = school;
+
     await this.schoolRepository.remove(school);
-    return { message: `L'établissement ${school.name} a été supprimé avec succès.` };
+
+    /**
+     * Émis après la suppression, et sans `schoolId` rattaché : l'établissement
+     * n'existe plus, et la ligne serait emportée par la cascade qu'elle est
+     * censée documenter. Le nom et le code restent dans la phrase.
+     */
+    void this.auditService.record(
+      {
+        action: AuditAction.SCHOOL_DELETED,
+        entityType: 'schools',
+        entityId: schoolId,
+        schoolId: null,
+        summary: `Établissement ${name} (${slug}) supprimé avec toutes ses données`,
+      },
+      actor,
+    );
+
+    return { message: `L'établissement ${name} a été supprimé avec succès.` };
   }
 }

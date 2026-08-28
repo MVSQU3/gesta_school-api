@@ -16,6 +16,7 @@ import { EvaluationType } from './entities/evaluation.entity';
 import { Evaluation } from './entities/evaluation.entity';
 import { Grade } from './entities/grade.entity';
 import { EvaluationsService } from './evaluations.service';
+import { AuditService } from '../audit/audit.service';
 
 describe('EvaluationsService (évaluations et saisie des notes)', () => {
   let service: EvaluationsService;
@@ -91,6 +92,7 @@ describe('EvaluationsService (évaluations et saisie des notes)', () => {
         { provide: getRepositoryToken(ClassRoomSubject), useValue: repos.program },
         { provide: getRepositoryToken(Enrollment), useValue: repos.enrollment },
         { provide: TeachingService, useValue: teaching },
+            { provide: AuditService, useValue: { record: jest.fn() } },
       ],
     }).compile();
 

@@ -7,8 +7,8 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuthUser } from '../common/decorators/current-user.decorator';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Absence } from '../absences/entities/absence.entity';
 import { Evaluation } from '../evaluations/entities/evaluation.entity';
 import { PeriodSystem, School } from '../schools/entities/school.entity';
@@ -32,6 +32,8 @@ export class GradingPeriodsService {
     private readonly evaluationRepository: Repository<Evaluation>,
     @InjectRepository(Absence)
     private readonly absenceRepository: Repository<Absence>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly auditService: AuditService,
   ) {}
 
@@ -115,12 +117,57 @@ export class GradingPeriodsService {
         );
       }
 
-      await this.periodRepository.remove(existing);
     }
 
-    // `generateForAcademicYear` ne recrée rien tant qu'il reste des périodes ;
-    // la suppression ci-dessus lui rend la main.
-    return await this.generateForAcademicYear(academicYearId, schoolId);
+    const school = await this.schoolRepository.findOne({
+      where: { id: schoolId },
+    });
+    const system = school?.periodSystem ?? PeriodSystem.TRIMESTER;
+
+    /**
+     * Suppression et recréation dans une seule transaction.
+     *
+     * Enchaîner les deux écritures séparément laissait une fenêtre où l'année
+     * n'avait plus aucune période : plus aucune note saisissable, et rien à
+     * l'écran pour expliquer pourquoi. Le découpage change entièrement ou pas
+     * du tout.
+     */
+    return await this.dataSource.transaction(async (manager) => {
+      if (existing.length > 0) {
+        await manager.remove(existing);
+      }
+
+      return await manager.save(
+        PERIOD_LABELS[system].map((label, index) =>
+          manager.create(GradingPeriod, {
+            schoolId,
+            academicYearId,
+            label,
+            sequence: index + 1,
+          }),
+        ),
+      );
+    });
+  }
+
+  /**
+   * Clôture toutes les périodes d'une année, à la clôture de celle-ci.
+   *
+   * Une période déjà close n'est pas retouchée : l'écriture ne porte que sur
+   * ce qui change, pour que la date de modification reste parlante.
+   */
+  async closeAllOfYear(
+    academicYearId: string,
+    schoolId: string,
+  ): Promise<number> {
+    if (!schoolId) throw new ForbiddenException('schoolId est requis');
+
+    const result = await this.periodRepository.update(
+      { schoolId, academicYearId, isClosed: false },
+      { isClosed: true },
+    );
+
+    return result.affected ?? 0;
   }
 
   async findAllByYear(

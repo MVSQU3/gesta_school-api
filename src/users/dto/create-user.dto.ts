@@ -9,13 +9,17 @@ import {
   IsUUID,
 } from 'class-validator';
 import { Role } from '../../common/enums/role.enum';
+import {
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_SHORT,
+} from '../../common/security/password-policy';
 
 export class CreateUserDto {
   @IsEmail()
   email: string;
 
   @IsString()
-  @MinLength(6)
+  @MinLength(MIN_PASSWORD_LENGTH, { message: PASSWORD_TOO_SHORT })
   password: string;
 
   @IsArray()

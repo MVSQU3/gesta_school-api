@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
 import { AuditService } from '../audit/audit.service';
 import { ClassRoom } from '../classrooms/entities/classroom.entity';
@@ -98,6 +98,20 @@ describe('EnrollmentsService (liste, filtres, export)', () => {
           provide: AuditService,
           useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
         },
+            {
+        provide: getDataSourceToken(),
+        // L'ouverture d'un dossier ecrit dans une transaction : le
+        // gestionnaire rejoue les appels sur les depots deja moques.
+        useValue: {
+          transaction: jest.fn((cb: any) =>
+            cb({
+              create: jest.fn((_e: unknown, d: any) => ({ ...d })),
+              save: jest.fn((d: any) => Promise.resolve({ id: 'enr-new', ...d })),
+              getRepository: jest.fn(),
+            }),
+          ),
+        },
+      },
       ],
     }).compile();
 

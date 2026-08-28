@@ -301,7 +301,8 @@ describe('SchoolsController (établissements)', () => {
   });
 
   it('délègue la suppression au service', async () => {
-    await controller.remove('school-1');
-    expect(service.remove).toHaveBeenCalledWith('school-1');
+    await controller.remove('school-1', ADMIN as any);
+    // L'acteur accompagne la suppression : elle est journalisée.
+    expect(service.remove).toHaveBeenCalledWith('school-1', ADMIN);
   });
 });

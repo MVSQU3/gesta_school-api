@@ -57,6 +57,7 @@ export class AcademicYearsController {
     return await this.academicYearsService.create(
       createAcademicYearDto,
       resolveSchoolId(user, querySchoolId),
+      user,
     );
   }
 
@@ -76,6 +77,7 @@ export class AcademicYearsController {
       id,
       updateDto,
       resolveSchoolId(user, querySchoolId),
+      user,
     );
   }
 

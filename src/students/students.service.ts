@@ -5,7 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -13,6 +13,11 @@ import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { Student } from './entities/student.entity';
 import { AcademicYear } from '../academic-years/entities/academic-year.entity';
+import {
+  buildPaginatedResult,
+  PaginatedResult,
+  PaginationQueryDto,
+} from '../common/dto/pagination.dto';
 
 @Injectable()
 export class StudentsService {
@@ -42,8 +47,18 @@ export class StudentsService {
     });
 
     if (!activeYear) {
+      /**
+       * Message aligné sur celui de la direction, et surtout actionnable.
+       *
+       * Le cas se produit dès qu'une année est clôturée sans qu'une autre soit
+       * activée. Le tableau de bord dégrade alors proprement en affichant zéro,
+       * là où la recherche d'élèves opposait une 404 sèche : deux écrans, deux
+       * comportements, pour la même cause. On garde le refus — sans année, il
+       * n'y a rien à chercher — mais la phrase dit quoi faire.
+       */
       throw new NotFoundException(
-        "Aucune année scolaire active n'a été configurée pour cet établissement.",
+        "Aucune année scolaire active dans cet établissement. Ouvrez ou activez " +
+          'une année depuis l’espace Direction, onglet « Année scolaire ».',
       );
     }
 
@@ -122,13 +137,25 @@ export class StudentsService {
       .getMany();
   }
 
+  /**
+   * `manager` permet d'écrire dans une transaction ouverte par l'appelant.
+   *
+   * L'ouverture d'un dossier crée la fiche puis l'inscription : sans ce
+   * paramètre, un échec sur la seconde laissait une fiche élève orpheline,
+   * que la recherche de doublons proposerait ensuite comme un élève existant.
+   */
   async create(
     createStudentDto: CreateStudentDto,
     schoolId: string,
+    manager?: EntityManager,
   ): Promise<Student> {
     if (!schoolId) throw new UnauthorizedException('Accès refusé.');
 
-    const student = this.studentRepository.create({
+    const repository = manager
+      ? manager.getRepository(Student)
+      : this.studentRepository;
+
+    const student = repository.create({
       schoolId,
       firstName: createStudentDto.firstName.trim(),
       lastName: createStudentDto.lastName.trim(),
@@ -136,7 +163,7 @@ export class StudentsService {
       parentPhone: createStudentDto.parentPhone,
     });
 
-    return await this.studentRepository.save(student);
+    return await repository.save(student);
   }
 
   /**
@@ -239,10 +266,19 @@ export class StudentsService {
     return saved;
   }
 
+  /**
+   * Élèves inscrits sur une année, paginés.
+   *
+   * Un établissement en compte plusieurs centaines : les rendre tous faisait
+   * transiter toute la promotion à chaque ouverture de l'écran.
+   */
   async findAllBySchool(
     schoolId: string,
     academicYearId?: string,
-  ): Promise<Student[]> {
+    pagination?: PaginationQueryDto,
+  ): Promise<PaginatedResult<Student>> {
+    const page = pagination?.page ?? 1;
+    const limit = pagination?.limit ?? 25;
     if (typeof schoolId !== 'string' || schoolId.trim() === '') {
       throw new UnauthorizedException('Accès refusé.');
     }
@@ -252,7 +288,7 @@ export class StudentsService {
       academicYearId,
     );
 
-    return await this.studentRepository
+    const [items, total] = await this.studentRepository
       .createQueryBuilder('student')
       .innerJoin(
         'student.enrollments',
@@ -261,7 +297,11 @@ export class StudentsService {
         { schoolId, resolvedYearId },
       )
       .orderBy('student.createdAt', 'DESC')
-      .getMany();
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return buildPaginatedResult(items, total, page, limit);
   }
 
   async findOneBySchool(

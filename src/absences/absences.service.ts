@@ -5,8 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import {
   Enrollment,
   EnrollmentStatus,
@@ -17,6 +17,8 @@ import { GradingPeriod } from '../grading-periods/entities/grading-period.entity
 import { TeachingService } from '../teaching/teaching.service';
 import { RecordAbsencesDto, UpdateAbsenceDto } from './dto/absence.dto';
 import { Absence, HalfDay } from './entities/absence.entity';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 
 @Injectable()
 export class AbsencesService {
@@ -28,6 +30,9 @@ export class AbsencesService {
     @InjectRepository(GradingPeriod)
     private readonly periodRepository: Repository<GradingPeriod>,
     private readonly teachingService: TeachingService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -192,10 +197,6 @@ export class AbsencesService {
     const toRemove = existing.filter(
       (a) => !declaredKeys.has(`${a.enrollmentId}|${a.halfDay}`),
     );
-    if (toRemove.length > 0) {
-      await this.absenceRepository.remove(toRemove);
-    }
-
     const byKey = new Map(
       existing.map((a) => [`${a.enrollmentId}|${a.halfDay}`, a]),
     );
@@ -218,8 +219,39 @@ export class AbsencesService {
         : this.absenceRepository.create(payload);
     });
 
-    if (toSave.length > 0) {
-      await this.absenceRepository.save(toSave);
+    /**
+     * Effacements et enregistrements dans une seule transaction.
+     *
+     * Séparément, une panne entre les deux laissait l'appel à moitié pris :
+     * des élèves repassés présents mais toujours marqués absents, ou
+     * l'inverse. Un appel vaut pour la classe entière ou pour personne — c'est
+     * un relevé, pas une suite d'écritures indépendantes.
+     */
+    if (toRemove.length > 0 || toSave.length > 0) {
+      await this.dataSource.transaction(async (manager) => {
+        if (toRemove.length > 0) await manager.remove(toRemove);
+        if (toSave.length > 0) await manager.save(toSave);
+      });
+    }
+
+    /**
+     * Une absence non justifiée a des conséquences — au bulletin, et parfois
+     * sur la bourse de l'élève. La famille qui la conteste doit pouvoir savoir
+     * qui l'a saisie, et quand.
+     */
+    if (toRemove.length > 0 || toSave.length > 0) {
+      void this.auditService.record(
+        {
+          action: AuditAction.ABSENCES_RECORDED,
+          entityType: 'absences',
+          entityId: dto.classRoomId,
+          schoolId,
+          summary:
+            `Appel du ${dto.date} : ${toSave.length} absence(s) enregistrée(s)` +
+            (toRemove.length > 0 ? `, ${toRemove.length} levée(s)` : ''),
+        },
+        user,
+      );
     }
 
     return { recorded: toSave.length, cleared: toRemove.length };

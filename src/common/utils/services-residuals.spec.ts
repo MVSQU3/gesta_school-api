@@ -33,7 +33,11 @@ describe('EvaluationsService (liste filtrée)', () => {
       andWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       addOrderBy: jest.fn().mockReturnThis(),
+      // La liste est paginée : `skip`/`take` puis `getManyAndCount`.
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
 
     const module = await Test.createTestingModule({
@@ -51,6 +55,7 @@ describe('EvaluationsService (liste filtrée)', () => {
         { provide: getRepositoryToken(ClassRoomSubject), useValue: {} },
         { provide: getRepositoryToken(Enrollment), useValue: {} },
         { provide: TeachingService, useValue: {} },
+            { provide: AuditService, useValue: { record: jest.fn(), diff: jest.fn() } },
       ],
     }).compile();
 
@@ -133,7 +138,11 @@ describe('StudentsService (élèves d’une année)', () => {
       addOrderBy: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
       getOne: jest.fn().mockResolvedValue(null),
+      // La liste est paginée : `skip`/`take` puis `getManyAndCount`.
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([]),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
     studentRepo = {
       findOne: jest.fn().mockResolvedValue(null),
@@ -152,6 +161,7 @@ describe('StudentsService (élèves d’une année)', () => {
           provide: AuditService,
           useValue: { record: jest.fn(), diff: jest.fn().mockReturnValue(null) },
         },
+            { provide: AuditService, useValue: { record: jest.fn(), diff: jest.fn() } },
       ],
     }).compile();
 

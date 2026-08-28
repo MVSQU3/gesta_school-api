@@ -5,8 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
@@ -27,6 +27,11 @@ import { User } from '../users/entities/user.entity';
 import { CreateParentDto } from './dto/create-parent.dto';
 import { LinkChildDto } from './dto/link-child.dto';
 import { ParentStudent } from './entities/parent-student.entity';
+import {
+  buildPaginatedResult,
+  PaginatedResult,
+  PaginationQueryDto,
+} from '../common/dto/pagination.dto';
 
 /** Compte parent tel que le voit le secrétariat, enfants compris. */
 export interface ParentSummary {
@@ -65,6 +70,8 @@ export class ParentsService {
     private readonly bulletinsService: BulletinsService,
     private readonly gradingPeriodsService: GradingPeriodsService,
     private readonly auditService: AuditService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   // ------------------------------------------------------------------
@@ -176,31 +183,43 @@ export class ParentsService {
     );
 
     const temporaryPassword = generateTemporaryPassword();
-    const parent = this.usersRepository.create({
-      email,
-      passwordHash: await bcrypt.hash(temporaryPassword, 12),
-      roles: [Role.PARENT],
-      firstName: dto.firstName.trim(),
-      lastName: dto.lastName.trim(),
-      gender: dto.gender,
-      phone: dto.phone?.trim() || null,
-      slug: school.slug,
-      schoolId: school.id,
-      mustChangePassword: true,
-    });
-    const saved = await this.usersRepository.save(parent);
 
-    if (students.length > 0) {
-      await this.linkRepository.save(
-        students.map((student) =>
-          this.linkRepository.create({
-            parentId: saved.id,
-            studentId: student.id,
-            schoolId,
-          }),
-        ),
-      );
-    }
+    /**
+     * Compte et rattachements dans une seule transaction.
+     *
+     * Séparément, un échec sur les liens laissait un compte parent sans aucun
+     * enfant : il ne verrait rien, et personne au secrétariat ne saurait à quoi
+     * le rattacher. Le compte n'existe que s'il est utilisable.
+     */
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const parent = manager.create(User, {
+        email,
+        passwordHash: await bcrypt.hash(temporaryPassword, 12),
+        roles: [Role.PARENT],
+        firstName: dto.firstName.trim(),
+        lastName: dto.lastName.trim(),
+        gender: dto.gender,
+        phone: dto.phone?.trim() || null,
+        slug: school.slug,
+        schoolId: school.id,
+        mustChangePassword: true,
+      });
+      const created = await manager.save(parent);
+
+      if (students.length > 0) {
+        await manager.save(
+          students.map((student) =>
+            manager.create(ParentStudent, {
+              parentId: created.id,
+              studentId: student.id,
+              schoolId,
+            }),
+          ),
+        );
+      }
+
+      return created;
+    });
 
     void this.auditService.record(
       {
@@ -245,10 +264,20 @@ export class ParentsService {
   }
 
   /** Liste les comptes parents de l'établissement, avec leurs enfants. */
+  /**
+   * Comptes parents de l'établissement, paginés.
+   *
+   * Une école compte autant de comptes parents que de familles : quelques
+   * centaines à quelques milliers. Les rendre tous chargeait la liste entière
+   * à chaque frappe dans la recherche.
+   */
   async findAllOfSchool(
     schoolId: string,
     search?: string,
-  ): Promise<ParentSummary[]> {
+    pagination?: PaginationQueryDto,
+  ): Promise<PaginatedResult<ParentSummary>> {
+    const page = pagination?.page ?? 1;
+    const limit = pagination?.limit ?? 25;
     const query = this.usersRepository
       .createQueryBuilder('user')
       .where('user.schoolId = :schoolId', { schoolId })
@@ -264,8 +293,14 @@ export class ParentsService {
       );
     }
 
-    const parents = await query.getMany();
-    if (parents.length === 0) return [];
+    const [parents, total] = await query
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    if (parents.length === 0) {
+      return buildPaginatedResult<ParentSummary>([], total, page, limit);
+    }
 
     // Une seule requête pour tous les liens, plutôt qu'une par parent : la
     // liste du secrétariat en compte facilement plusieurs centaines.
@@ -274,7 +309,12 @@ export class ParentsService {
       relations: { student: true },
     });
 
-    return parents.map((parent) => this.toSummary(parent, links));
+    return buildPaginatedResult(
+      parents.map((parent) => this.toSummary(parent, links)),
+      total,
+      page,
+      limit,
+    );
   }
 
   /** Détail d'un compte parent. */

@@ -109,7 +109,7 @@ describe('AdminController (administration de la plateforme)', () => {
   });
 
   it('délègue la création d’un établissement et d’un compte', async () => {
-    await controller.createSchool({ name: 'X', slug: 'X' } as any);
+    await controller.createSchool({ name: 'X', slug: 'X' } as any, ADMIN as any);
     await controller.createUser({ email: 'a@b.ci' } as any);
 
     expect(service.createSchool).toHaveBeenCalled();

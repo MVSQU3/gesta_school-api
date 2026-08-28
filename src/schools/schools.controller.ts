@@ -87,7 +87,10 @@ export class SchoolsController {
 
   @Roles(Role.SUPER_ADMIN)
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ message: string }> {
-    return await this.schoolsService.remove(id);
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<{ message: string }> {
+    return await this.schoolsService.remove(id, user);
   }
 }

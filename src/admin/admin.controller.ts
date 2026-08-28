@@ -6,6 +6,10 @@ import { Role } from 'src/common/enums/role.enum';
 import { School, Student, User } from '../entities/index';
 import { CreateSchoolDto, CreateStudentDto, CreateUserDto } from '../dto/index';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import {
+  AuthUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
 
 @Controller('api/v1/admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -61,8 +65,11 @@ export class AdminController {
 
   @Roles(Role.SUPER_ADMIN)
   @Post('create-school')
-  async createSchool(@Body() createSchoolDto: CreateSchoolDto): Promise<School> {
-    return await this.adminService.createSchool(createSchoolDto);
+  async createSchool(
+    @Body() createSchoolDto: CreateSchoolDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<School> {
+    return await this.adminService.createSchool(createSchoolDto, user);
   }
 
 

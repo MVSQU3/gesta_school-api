@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { Role } from '../common/enums/role.enum';
 import { Enrollment } from '../enrollments/entities/enrollment.entity';
@@ -13,6 +13,7 @@ import { GradingPeriod } from '../grading-periods/entities/grading-period.entity
 import { TeachingService } from '../teaching/teaching.service';
 import { Absence, HalfDay } from './entities/absence.entity';
 import { AbsencesService } from './absences.service';
+import { AuditService } from '../audit/audit.service';
 
 describe('AbsencesService (appel et assiduité)', () => {
   let service: AbsencesService;
@@ -94,6 +95,22 @@ describe('AbsencesService (appel et assiduité)', () => {
         { provide: getRepositoryToken(Enrollment), useValue: repos.enrollment },
         { provide: getRepositoryToken(GradingPeriod), useValue: repos.period },
         { provide: TeachingService, useValue: teaching },
+        {
+
+          provide: getDataSourceToken(),
+
+          // L'appel s'ecrit dans une transaction : le gestionnaire rejoue les
+
+          // appels sur le depot, pour que les assertions existantes tiennent.
+
+          useValue: {
+
+            transaction: jest.fn((cb: any) => cb(repos.absence)),
+
+          },
+
+        },
+            { provide: AuditService, useValue: { record: jest.fn() } },
       ],
     }).compile();
 

@@ -5,8 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Not, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, LessThan, Not, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -33,6 +33,19 @@ import { Enrollment, EnrollmentStatus } from './entities/enrollment.entity';
 /** Inscription enrichie de sa situation financière. */
 export interface EnrollmentWithBalance extends Enrollment {
   balanceInfo: EnrollmentBalance;
+  /**
+   * Impayés du même élève sur les années précédentes.
+   *
+   * Signalés, jamais reportés : ajouter d'office la dette de l'an dernier au
+   * dossier de cette année mélangerait deux exercices comptables et fausserait
+   * le journal de caisse des deux. Le guichet voit l'ardoise et décide — c'est
+   * une négociation avec la famille, pas un calcul.
+   */
+  previousDebts?: Array<{
+    reference: string;
+    academicYearLabel: string;
+    balance: number;
+  }>;
 }
 
 @Injectable()
@@ -52,6 +65,8 @@ export class EnrollmentsService {
     private readonly referencesService: ReferencesService,
     private readonly balanceService: BalanceService,
     private readonly auditService: AuditService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) { }
 
   /**
@@ -59,7 +74,10 @@ export class EnrollmentsService {
    * La séquence est réservée en base de façon atomique : chaque appel — création
    * comme renouvellement — consomme un numéro qui ne sera jamais réattribué.
    */
-  private async generateReference(schoolId: string): Promise<string> {
+  private async generateReference(
+    schoolId: string,
+    manager?: EntityManager,
+  ): Promise<string> {
     const school = await this.schoolRepository.findOne({
       where: { id: schoolId },
     });
@@ -68,6 +86,7 @@ export class EnrollmentsService {
     return await this.referencesService.nextEnrollmentReference(
       schoolId,
       schoolSlug,
+      manager,
     );
   }
 
@@ -107,9 +126,12 @@ export class EnrollmentsService {
   async create(
     createEnrollmentDto: CreateEnrollmentDto,
     createdByUserId: string | null = null,
+    outerManager?: EntityManager,
   ): Promise<Enrollment> {
     const schoolId = createEnrollmentDto.schoolId;
-    let studentId = createEnrollmentDto.studentId;
+    const studentId = createEnrollmentDto.studentId;
+    /** Fiche à créer dans la transaction, quand l'élève est nouveau. */
+    let pendingStudentData: CreateEnrollmentDto['studentData'] | undefined;
 
     // Classe et année scolaire sont vérifiées EN PREMIER, avant toute écriture.
     // Les valider après la création de l'élève laissait un élève orphelin en
@@ -197,14 +219,12 @@ export class EnrollmentsService {
         });
       }
 
-      const newStudent = await this.studentsService.create(
-        createEnrollmentDto.studentData,
-        schoolId,
-      );
-      studentId = newStudent.id;
+      // La fiche est créée dans la même transaction que le dossier : voir
+      // le commentaire du bloc transactionnel plus bas.
+      pendingStudentData = createEnrollmentDto.studentData;
     }
 
-    if (!studentId) {
+    if (!studentId && !pendingStudentData) {
       throw new BadRequestException(
         'Veuillez fournir un studentId ou les données studentData complètes pour enregistrer l’élève.',
       );
@@ -213,7 +233,8 @@ export class EnrollmentsService {
     // Un élève ne peut pas avoir deux dossiers actifs sur la même année
     // scolaire. Un dossier expiré ne bloque pas : il se renouvelle depuis
     // « Les Oubliés ».
-    const activeEnrollment = await this.enrollmentRepository.findOne({
+    const activeEnrollment = studentId
+      ? await this.enrollmentRepository.findOne({
       where: {
         studentId,
         academicYearId: createEnrollmentDto.academicYearId,
@@ -221,7 +242,8 @@ export class EnrollmentsService {
         status: Not(EnrollmentStatus.EXPIRED),
       },
       relations: { academicYear: true },
-    });
+        })
+      : null;
 
     if (activeEnrollment) {
       throw new ConflictException(
@@ -229,24 +251,53 @@ export class EnrollmentsService {
       );
     }
 
-    const reference = await this.generateReference(
-      createEnrollmentDto.schoolId,
-    );
     const expiresAt = this.calculate72HoursExpiration();
 
-    const enrollment = this.enrollmentRepository.create({
-      schoolId: createEnrollmentDto.schoolId,
-      studentId,
-      classRoomId: createEnrollmentDto.classRoomId,
-      academicYearId: createEnrollmentDto.academicYearId,
-      reference,
-      status: EnrollmentStatus.PENDING_PAYMENT,
-      expiresAt,
-      totalDue: Number(classRoom.tuitionFee) || 0,
-      createdByUserId,
-    });
+    /**
+     * Fiche élève, numéro de référence et dossier dans une seule transaction.
+     *
+     * Enchaînés séparément, un échec sur le dossier laissait derrière lui une
+     * fiche élève orpheline — que la recherche de doublons proposerait ensuite
+     * comme un élève déjà inscrit — et une référence consommée pour rien dans
+     * le compteur, créant un trou dans la numérotation comptable.
+     *
+     * `run` permet à la réinscription en masse de fournir sa propre
+     * transaction, pour que le lot entier soit atomique.
+     */
+    const run = async (manager: EntityManager) => {
+      const resolvedStudentId = pendingStudentData
+        ? (
+            await this.studentsService.create(
+              pendingStudentData,
+              schoolId,
+              manager,
+            )
+          ).id
+        : (studentId as string);
 
-    const saved = await this.enrollmentRepository.save(enrollment);
+      const reference = await this.generateReference(
+        createEnrollmentDto.schoolId,
+        manager,
+      );
+
+      const enrollment = manager.create(Enrollment, {
+        schoolId: createEnrollmentDto.schoolId,
+        studentId: resolvedStudentId,
+        classRoomId: createEnrollmentDto.classRoomId,
+        academicYearId: createEnrollmentDto.academicYearId,
+        reference,
+        status: EnrollmentStatus.PENDING_PAYMENT,
+        expiresAt,
+        totalDue: Number(classRoom.tuitionFee) || 0,
+        createdByUserId,
+      });
+
+      return await manager.save(enrollment);
+    };
+
+    const saved = outerManager
+      ? await run(outerManager)
+      : await this.dataSource.transaction(run);
 
     // Retourner l'inscription rechargée avec l'élève et ses coordonnées
     return await this.findOne(saved.id);
@@ -310,6 +361,17 @@ export class EnrollmentsService {
     // dans la sélection ne doit pas produire deux dossiers.
     const uniqueIds = [...new Set(dto.studentIds)];
 
+    /**
+     * Le lot entier dans une seule transaction.
+     *
+     * Sans elle, une panne au trentième élève d'une liste de cinquante
+     * laissait trente dossiers créés, vingt absents, et aucun moyen de savoir
+     * où reprendre. Les refus métier — élève d'une autre école, dossier déjà
+     * ouvert — sont détectés avant toute écriture et continuent d'alimenter
+     * `skipped` : la transaction ne les annule pas, elle ne protège que des
+     * défaillances techniques.
+     */
+    await this.dataSource.transaction(async (manager) => {
     for (const studentId of uniqueIds) {
       const student = await this.studentsService.findOneOfSchool(
         studentId,
@@ -337,6 +399,7 @@ export class EnrollmentsService {
             academicYearId: dto.academicYearId,
           },
           createdByUserId,
+          manager,
         );
         created.push({ studentId, reference: enrollment.reference, name });
       } catch (error) {
@@ -350,6 +413,7 @@ export class EnrollmentsService {
         });
       }
     }
+    });
 
     // Une seule ligne pour le lot, et non trente : le journal doit rester
     // lisible, et c'est bien une decision unique qui a ete prise.
@@ -658,7 +722,11 @@ export class EnrollmentsService {
    * Écrase l'ancienne référence par une nouvelle (ex: INS-CMB-26-0002),
    * réinitialise le délai à +72h, et repasse le statut à PENDING_PAYMENT.
    */
-  async renew(id: string, schoolId: string): Promise<Enrollment> {
+  async renew(
+    id: string,
+    schoolId: string,
+    actor?: AuthUser,
+  ): Promise<Enrollment> {
     if (!schoolId) throw new (await import('@nestjs/common')).ForbiddenException('schoolId est requis');
     const enrollment = await this.findOne(id);
 
@@ -679,15 +747,63 @@ export class EnrollmentsService {
       );
     }
 
+    /**
+     * Un dossier d'année clôturée ne se renouvelle pas.
+     *
+     * Renouveler remet 72 h au compteur et repasse le dossier en attente de
+     * versement — dans son année d'origine. Sur une année close, cela rouvrait
+     * par la bande ce que la création interdit : un dossier vivant dans une
+     * année terminée, invisible du tableau de bord et absent des listes de
+     * classe, mais bien facturé à la famille.
+     *
+     * Le renouvellement n'est volontairement pas rebasculé vers l'année en
+     * cours : cela déplacerait un dossier d'une année à l'autre en conservant
+     * ses versements et sa référence, ce qui fausserait deux exercices
+     * comptables. La famille se réinscrit sur l'année en cours, ce qui produit
+     * un dossier neuf et une référence neuve.
+     */
+    const year = await this.academicYearRepository.findOne({
+      where: { id: enrollment.academicYearId, schoolId },
+    });
+
+    if (year && !year.isActive) {
+      throw new ConflictException(
+        `Le dossier ${enrollment.reference} appartient à l'année ${year.label}, qui est clôturée : ` +
+          "il ne peut plus être renouvelé. Inscrivez l'élève sur l'année en cours.",
+      );
+    }
+
     // Clonage fantôme Multi-Tenant: Nouvelle référence personnalisée + Reset 72h
     const newReference = await this.generateReference(enrollment.schoolId);
     const newExpiresAt = this.calculate72HoursExpiration();
+
+    const previousReference = enrollment.reference;
 
     enrollment.reference = newReference;
     enrollment.expiresAt = newExpiresAt;
     enrollment.status = EnrollmentStatus.PENDING_PAYMENT;
 
     const saved = await this.enrollmentRepository.save(enrollment);
+
+    /**
+     * Renouveler un dossier expiré remet 72 h au compteur et consomme une
+     * nouvelle référence : c'est une décision de guichet, elle doit se voir.
+     * L'ancienne référence est conservée dans le journal — c'est elle que la
+     * famille détient sur son premier récépissé.
+     */
+    void this.auditService.record(
+      {
+        action: AuditAction.ENROLLMENT_RENEWED,
+        entityType: 'enrollments',
+        entityId: saved.id,
+        schoolId,
+        summary: `Dossier ${previousReference} renouvele sous la reference ${newReference}`,
+        changes: {
+          reference: { before: previousReference, after: newReference },
+        },
+      },
+      actor,
+    );
 
     return await this.findOne(saved.id);
   }
@@ -812,7 +928,49 @@ export class EnrollmentsService {
 
     const result = enrollment as EnrollmentWithBalance;
     result.balanceInfo = await this.balanceService.compute(enrollment);
+    result.previousDebts = await this.findPreviousDebts(
+      enrollment.studentId,
+      schoolId,
+      enrollment.academicYearId,
+    );
     return result;
+  }
+
+  /**
+   * Dossiers d'années antérieures de l'élève encore partiellement réglés.
+   *
+   * Le cas se produit à chaque rentrée : une famille se réinscrit alors qu'il
+   * reste un reliquat de l'année passée. Sans ce signal, la caisse encaissait
+   * la nouvelle scolarité sans savoir qu'une ardoise courait, et l'impayé ne
+   * refaisait surface qu'à l'édition des bulletins — ou jamais.
+   *
+   * Les dossiers expirés sont écartés : ce sont des inscriptions abandonnées,
+   * pas des dettes.
+   */
+  private async findPreviousDebts(
+    studentId: string,
+    schoolId: string,
+    currentAcademicYearId: string,
+  ): Promise<EnrollmentWithBalance['previousDebts']> {
+    const others = await this.enrollmentRepository.find({
+      where: {
+        studentId,
+        schoolId,
+        academicYearId: Not(currentAcademicYearId),
+        status: EnrollmentStatus.PARTIALLY_PAID,
+      },
+      relations: { academicYear: true },
+    });
+
+    const debts = await Promise.all(
+      others.map(async (other) => ({
+        reference: other.reference,
+        academicYearLabel: other.academicYear?.label ?? '',
+        balance: (await this.balanceService.compute(other)).balance,
+      })),
+    );
+
+    return debts.filter((d) => d.balance > 0);
   }
 
   /**

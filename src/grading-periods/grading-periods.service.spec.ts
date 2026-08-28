@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { AuditService } from '../audit/audit.service';
 import { Evaluation } from '../evaluations/entities/evaluation.entity';
 import { PeriodSystem, School } from '../schools/entities/school.entity';
@@ -18,6 +18,8 @@ describe('GradingPeriodsService (périodes de notation)', () => {
   let schoolRepo: any;
   let evaluationRepo: any;
   let audit: any;
+  let manager: any;
+  let dataSource: any;
   let absenceRepo: any;
 
   const period = (overrides: any = {}) => ({
@@ -46,6 +48,16 @@ describe('GradingPeriodsService (périodes de notation)', () => {
     evaluationRepo = { count: jest.fn().mockResolvedValue(0) };
     absenceRepo = { count: jest.fn().mockResolvedValue(0) };
     audit = { record: jest.fn(), diff: jest.fn().mockReturnValue(null) };
+    // Le gestionnaire de transaction rejoue les appels sur les mêmes mocks :
+    // les assertions existantes sur periodRepo restent valables.
+    manager = {
+      remove: jest.fn(),
+      create: jest.fn((_e: unknown, d: unknown) => d),
+      save: jest.fn((d: unknown) => Promise.resolve(d)),
+    };
+    dataSource = {
+      transaction: jest.fn((cb: any) => cb(manager)),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,6 +67,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
         { provide: getRepositoryToken(Evaluation), useValue: evaluationRepo },
         { provide: AuditService, useValue: audit },
         { provide: getRepositoryToken(Absence), useValue: absenceRepo },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
@@ -173,7 +186,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
       await expect(service.remove('period-1', 'school-1')).rejects.toThrow(
         ConflictException,
       );
-      expect(periodRepo.remove).not.toHaveBeenCalled();
+      expect(manager.remove).not.toHaveBeenCalled();
     });
   });
 
@@ -209,9 +222,9 @@ describe('GradingPeriodsService (périodes de notation)', () => {
 
       await service.regenerateForAcademicYear('year-1', 'school-1');
 
-      expect(periodRepo.remove).toHaveBeenCalled();
+      expect(manager.remove).toHaveBeenCalled();
       // Deux semestres après la bascule, et non trois trimestres.
-      expect(periodRepo.save).toHaveBeenCalledWith(
+      expect(manager.save).toHaveBeenCalledWith(
         expect.arrayContaining([
           expect.objectContaining({ label: '1er Semestre' }),
           expect.objectContaining({ label: '2e Semestre' }),
@@ -227,7 +240,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
       await expect(
         service.regenerateForAcademicYear('year-1', 'school-1'),
       ).rejects.toThrow(/déjà entamée/);
-      expect(periodRepo.remove).not.toHaveBeenCalled();
+      expect(manager.remove).not.toHaveBeenCalled();
     });
 
     it('refuse dès qu’une absence est rattachée', async () => {
@@ -237,7 +250,7 @@ describe('GradingPeriodsService (périodes de notation)', () => {
       await expect(
         service.regenerateForAcademicYear('year-1', 'school-1'),
       ).rejects.toThrow(/déjà entamée/);
-      expect(periodRepo.remove).not.toHaveBeenCalled();
+      expect(manager.remove).not.toHaveBeenCalled();
     });
 
     it('exige un établissement résolu', async () => {

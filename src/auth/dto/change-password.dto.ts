@@ -1,4 +1,8 @@
 import { IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_SHORT,
+} from '../../common/security/password-policy';
 
 export class ChangePasswordDto {
   @IsString({ message: 'Le mot de passe actuel doit être une chaîne de caractères' })
@@ -6,9 +10,7 @@ export class ChangePasswordDto {
   currentPassword: string;
 
   @IsString({ message: 'Le nouveau mot de passe doit être une chaîne de caractères' })
-  @MinLength(6, {
-    message: 'Le nouveau mot de passe doit comporter au moins 6 caractères',
-  })
+  @MinLength(MIN_PASSWORD_LENGTH, { message: PASSWORD_TOO_SHORT })
   newPassword: string;
 }
 
@@ -24,8 +26,6 @@ export class ResetPasswordDto {
    */
   @IsOptional()
   @IsString({ message: 'Le nouveau mot de passe doit être une chaîne de caractères' })
-  @MinLength(6, {
-    message: 'Le nouveau mot de passe doit comporter au moins 6 caractères',
-  })
+  @MinLength(MIN_PASSWORD_LENGTH, { message: PASSWORD_TOO_SHORT })
   newPassword?: string;
 }
